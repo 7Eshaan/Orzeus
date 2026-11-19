@@ -12,6 +12,7 @@ import type {
   Tier,
   TokenUsage,
 } from "@orzeus/schema";
+import type { GenerateRequest, GenerateResult } from "./structured.js";
 
 /**
  * One interface for every provider (docs/architecture/02-core-schemas.md). Two shapes of work:
@@ -23,6 +24,12 @@ export interface ProviderAdapter {
   /** Is the binary present, the key valid, the endpoint reachable? Never spends tokens. */
   probe(account: AccountContext, signal: AbortSignal): Promise<ProbeResult>;
   listModels(account: AccountContext, signal: AbortSignal): Promise<readonly ModelInfo[]>;
+  /** Present when manifest.capabilities.structuredOutput is true. Used for planning and review. */
+  generate?<T>(
+    request: GenerateRequest<T>,
+    account: AccountContext,
+    signal: AbortSignal,
+  ): Promise<GenerateResult<T>>;
   /** Present when manifest.capabilities.agentSession is true. */
   startSession?(request: SessionRequest, account: AccountContext): AgentSession;
   /** Official quota signal, when the provider has one. */

@@ -9,10 +9,13 @@
   "exclude": ["src/**/*.test.ts"],
   "references": [
     {
-      "path": "../../packages/schema"
+      "path": "../../packages/context"
     },
     {
       "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/schema"
     }
   ]
 }

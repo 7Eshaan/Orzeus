@@ -89,6 +89,12 @@ models; killing the engine mid-node and restarting resumes correctly.
 
 ## Phase 3: Planner, context packets, MCP gateway, memory (about 1.5 weeks)
 
+Status: **done** (2026-11-19). Exit check (`ORZEUS_E2E_PLANNER=codex-app-server:gpt-6-luna`):
+`orzeus run --goal` on the calc-plus fixture planned with Codex, built with the local lfm3 worker
+through the MCP gateway, passed its check, integrated, and the exported trace shows the planning
+call, the issued packet and the gateway tool calls. The local 1.7B model cannot plan (see
+"Phase 3 notes").
+
 - Planner prompt + `PlannerOutput` structured output via `generate`, validation, plan approval
   gate (CLI prompt for now).
 - Packet renderer and repo map (tree-sitter symbol index).
@@ -101,6 +107,26 @@ Exit: `orzeus run --goal "..."` plans, executes and verifies a small real change
 repo; the trace shows every packet and tool call.
 
 **Commit point 5:** `feat: planner, context packets and MCP gateway`.
+
+### Phase 3 notes
+
+- New package `@orzeus/context` (tree-sitter repo map, symbol index, pointer resolution).
+- Structured output: `generate()` on `openai-compatible` (JSON-schema constrained decoding,
+  falling back to a forced tool call when the runtime cannot constrain, as Ollama's MLX runner
+  cannot), `codex-app-server` (ephemeral read-only thread with `outputSchema`), `anthropic-api`
+  (`output_config.format`) and `gemini-api` (`responseJsonSchema`). Parsing tolerates comments,
+  trailing commas and near-miss shapes, then always validates.
+- The planner emits a compact `PlanDraft`; Orzeus fills ids, routing, budgets and tool grants,
+  validates, and gives the planner one repair round with the problems listed.
+- `--local-reasoning none` keeps small "thinking" local models from spending their whole budget
+  on hidden reasoning.
+- `anthropic-api` and `gemini-api` are planners only for now (no API keys here to test live
+  worker loops); `claude-cli` waits until the CLI is installed.
+- Codex workers do not yet get the gateway (their MCP config path is unverified live).
+- Plans are checked against the real repository before approval: a check that needs a missing
+  package.json script or an uninstalled tool goes back to the planner's repair round (the first
+  live Codex plan assumed `npm test` in a repo without a test script). The planner prompt also
+  describes the repo's build and test tooling.
 
 ## Phase 4: Parallelism, recovery, escalation, approvals (about 1.5 weeks)
 

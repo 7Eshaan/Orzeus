@@ -116,3 +116,26 @@ Sources: <https://agentclientprotocol.com/protocol/v1/overview>,
 
 - Ollama 0.40.14 is installed on the Mac (OpenAI-compatible endpoint).
 - Any ACP v1 agent.
+
+## Added in Phase 3 (checked 2026-11-19)
+
+- MCP TypeScript SDK v2 (`@modelcontextprotocol/server` and `client` 2.4.0): `createMcpHandler`
+  gives a fetch-style handler (`handler.fetch(request, { authInfo })`) that builds a fresh
+  `McpServer` per request; `fromJsonSchema` wraps raw JSON Schemas for `registerTool`;
+  `serveStdio` serves stdio servers. The `@modelcontextprotocol/node` adapter (2.1.2) pulls in
+  Hono, so Orzeus bridges `node:http` itself.
+- Anthropic structured outputs: `output_config.format = { type: "json_schema", schema }`, no beta
+  header, `anthropic-version: 2026-10-21` in the docs example; strict schemas reject value
+  constraints such as `minimum`, `maxLength` and `oneOf`, and need `additionalProperties: false`.
+  Source: <https://platform.claude.com/docs/en/build-with-claude/structured-outputs>.
+- Gemini: docs moved to aistudio.google.com and now feature an Interactions API; Orzeus uses
+  `models/{model}:generateContent` with `generationConfig.responseJsonSchema` and the
+  `x-goog-api-key` header (not yet verified live).
+- Codex app-server `turn/start` accepts `outputSchema`; `thread/start` accepts `ephemeral`,
+  `sandbox: "read-only"`, `approvalPolicy: "never"` and `developerInstructions`.
+- tree-sitter: `web-tree-sitter` 0.27.2 cannot load the old `tree-sitter-wasms` 0.1.x grammars
+  (ABI mismatch); the grammar packages' own `.wasm` files work (`tree-sitter-typescript`
+  0.23.2, `tree-sitter-javascript` 0.25.0, `tree-sitter-python` 0.25.0). Their native build
+  scripts are denied via `allowBuilds` in `pnpm-workspace.yaml`.
+- Ollama 0.40 with the MLX runner (lfm3) rejects JSON-schema constrained output (HTTP 501) but
+  supports tool calls and `reasoning_effort`.

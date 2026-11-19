@@ -100,6 +100,34 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/** Manifest and source checks every adapter must pass, including generate-only adapters. */
+export function describeManifestChecks(
+  getAdapter: () => Promise<ProviderAdapter>,
+  adapterDir: string,
+): void {
+  it("declares a compliant manifest that matches its methods", async () => {
+    const adapter = await getAdapter();
+    const m = adapter.manifest;
+    expect(m.compliance.officialInterface).toMatch(/^https:\/\//);
+    expect([
+      m.compliance.readsForeignCredentials,
+      m.compliance.rotatesAccounts,
+      m.compliance.spoofsClient,
+    ]).toEqual([false, false, false]);
+    expect(m.capabilities.agentSession).toBe(adapter.startSession !== undefined);
+    expect(m.capabilities.reportsQuota).toBe(adapter.readQuota !== undefined);
+  });
+
+  it("never references another tool's credential files", () => {
+    for (const file of sourceFiles(adapterDir)) {
+      const text = readFileSync(file, "utf8");
+      expect(text, file).not.toMatch(
+        /\.claude\/|\.codex\/|auth\.json|\.cursor\/|cookies|keychain/i,
+      );
+    }
+  });
+}
+
 /**
  * The shared suite every adapter must pass (docs/architecture/04-providers.md). Runs against
  * recorded fixtures, never the network.
@@ -110,27 +138,7 @@ export function describeConformance(
   makeHarness: () => Promise<ConformanceHarness>,
 ): void {
   describe(`${name} conformance`, () => {
-    it("declares a compliant manifest that matches its methods", async () => {
-      const { adapter } = await makeHarness();
-      const m = adapter.manifest;
-      expect(m.compliance.officialInterface).toMatch(/^https:\/\//);
-      expect([
-        m.compliance.readsForeignCredentials,
-        m.compliance.rotatesAccounts,
-        m.compliance.spoofsClient,
-      ]).toEqual([false, false, false]);
-      expect(m.capabilities.agentSession).toBe(adapter.startSession !== undefined);
-      expect(m.capabilities.reportsQuota).toBe(adapter.readQuota !== undefined);
-    });
-
-    it("never references another tool's credential files", () => {
-      for (const file of sourceFiles(adapterDir)) {
-        const text = readFileSync(file, "utf8");
-        expect(text, file).not.toMatch(
-          /\.claude\/|\.codex\/|auth\.json|\.cursor\/|cookies|keychain/i,
-        );
-      }
-    });
+    describeManifestChecks(async () => (await makeHarness()).adapter, adapterDir);
 
     it("probes without spending tokens", async () => {
       const { adapter, account } = await makeHarness();

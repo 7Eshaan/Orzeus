@@ -11,9 +11,17 @@ import type {
 } from "../../adapter.js";
 import { SessionController } from "../../session.js";
 import {
+  type GenerateRequest,
+  type GenerateResult,
+  parseJsonOutput,
+  toStrictJsonSchema,
+} from "../../structured.js";
+import { connectGateway, type GatewayTools } from "./gateway-tools.js";
+import {
   deleteFile,
   listFiles,
   readText,
+  type ToolDefinition,
   toolsFor,
   toWorktreePath,
   writeText,
@@ -25,6 +33,11 @@ export interface OpenAiCompatibleConfig {
   readonly fetch?: typeof fetch;
   readonly requestTimeoutMs?: number;
   readonly temperature?: number;
+  /**
+   * Sent as reasoning_effort when set. Small local "thinking" models can spend a whole token
+   * budget on hidden reasoning; "none" or "low" keeps them answering.
+   */
+  readonly reasoningEffort?: "none" | "low" | "medium" | "high";
 }
 
 interface ChatMessage {
@@ -48,6 +61,7 @@ export const SYSTEM_PROMPT = [
   "Work only through the tools. Paths are relative to the repository root.",
   "Read before you edit. Write complete file contents with write_file.",
   "Do not run commands: Orzeus runs the verification checks after you finish.",
+  "Tools whose names start with a server prefix (e.g. orzeus__read_context) come from Orzeus; use them to read the context listed in the task.",
   "If the task cannot be done without a decision, call report_ambiguity instead of guessing.",
   "When the task is complete, call finish with a short summary.",
 ].join("\n");
@@ -62,9 +76,9 @@ export const OPENAI_COMPATIBLE_MANIFEST: AdapterManifest = {
     { kind: "api_key", secretName: "openai-compatible", envVar: "OPENAI_COMPATIBLE_API_KEY" },
   ],
   capabilities: {
-    structuredOutput: false,
+    structuredOutput: true,
     agentSession: true,
-    mcpClient: false,
+    mcpClient: true,
     resume: false,
     steerMidTurn: true,
     approvalCallbacks: true,
@@ -140,6 +154,107 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     }));
   }
 
+  /**
+   * Structured output with graceful degradation, because local runtimes differ: JSON-schema
+   * constrained decoding first; if the runtime cannot do it (e.g. Ollama's MLX runner answers
+   * 501), a single forced tool call whose parameters are the schema; the answer is always
+   * validated against the schema either way.
+   */
+  async generate<T>(
+    request: GenerateRequest<T>,
+    account: AccountContext,
+    signal: AbortSignal,
+  ): Promise<GenerateResult<T>> {
+    const started = Date.now();
+    const schema = toStrictJsonSchema(request.output.jsonSchema);
+    const messages = [
+      { role: "system", content: request.system },
+      { role: "user", content: request.prompt },
+    ];
+    const constrained = await this.#request(
+      "POST",
+      "/chat/completions",
+      {
+        model: request.model,
+        messages,
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: request.output.name, schema, strict: true },
+        },
+        max_tokens: request.maxOutputTokens,
+        temperature: 0,
+        ...this.#reasoning(),
+      },
+      account,
+      signal,
+    );
+    if (constrained.ok) {
+      const body = (await constrained.json()) as ChatResponse;
+      const text = body.choices?.[0]?.message?.content ?? "";
+      return {
+        value: parseJsonOutput(text, request.output),
+        usage: toUsage(body.usage),
+        costMicroUsd: 0,
+        quota: [],
+        latencyMs: Date.now() - started,
+      };
+    }
+    const reason = await constrained.text();
+    if (
+      constrained.status !== 400 &&
+      constrained.status !== 501 &&
+      !/structured output|response_format/i.test(reason)
+    ) {
+      throw new Error(`HTTP ${constrained.status}: ${reason.slice(0, 500)}`);
+    }
+
+    const toolName = `submit_${request.output.name}`.replace(/[^a-zA-Z0-9_]/g, "_");
+    const viaTool = await this.#request(
+      "POST",
+      "/chat/completions",
+      {
+        model: request.model,
+        messages: [
+          {
+            role: "system",
+            content: `${request.system}\n\nSubmit your answer by calling the ${toolName} tool exactly once.`,
+          },
+          messages[1],
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: toolName,
+              description: `Submit the ${request.output.name}.`,
+              parameters: schema,
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: toolName } },
+        max_tokens: request.maxOutputTokens,
+        temperature: 0,
+        ...this.#reasoning(),
+      },
+      account,
+      signal,
+    );
+    if (!viaTool.ok)
+      throw new Error(`HTTP ${viaTool.status}: ${(await viaTool.text()).slice(0, 500)}`);
+    const body = (await viaTool.json()) as ChatResponse;
+    const message = body.choices?.[0]?.message;
+    const call =
+      message?.tool_calls?.find((c) => c.function.name === toolName) ?? message?.tool_calls?.[0];
+    const text = call?.function.arguments ?? message?.content ?? "";
+    return {
+      value: parseJsonOutput(text, request.output),
+      usage: toUsage(body.usage),
+      costMicroUsd: 0,
+      quota: [],
+      latencyMs: Date.now() - started,
+    };
+  }
+
   startSession(request: SessionRequest, account: AccountContext) {
     const controller = new SessionController();
     const abort = new AbortController();
@@ -180,7 +295,27 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     signal: AbortSignal,
     steering: string[],
   ): Promise<void> {
-    const tools = toolsFor(request.packet.tools);
+    const gateway: GatewayTools | null =
+      request.mcp === null ? null : await connectGateway(request.mcp, signal);
+    try {
+      await this.#loopWith(request, account, controller, signal, steering, gateway);
+    } finally {
+      await gateway?.close();
+    }
+  }
+
+  async #loopWith(
+    request: SessionRequest,
+    account: AccountContext,
+    controller: SessionController,
+    signal: AbortSignal,
+    steering: string[],
+    gateway: GatewayTools | null,
+  ): Promise<void> {
+    const tools: ToolDefinition[] = [
+      ...toolsFor(request.packet.tools),
+      ...(gateway?.definitions ?? []),
+    ];
     const messages: ChatMessage[] = [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: request.prompt },
@@ -202,6 +337,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           tools,
           tool_choice: "auto",
           temperature: this.#config.temperature ?? 0.2,
+          ...this.#reasoning(),
         },
         account,
         signal,
@@ -239,7 +375,14 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           tool: call.function.name,
           input: args,
         });
-        const result = await this.#runTool(request, controller, call.id, call.function.name, args);
+        const result: {
+          text: string;
+          isError: boolean;
+          stop?: { status: "completed" | "needs_input"; summary: string };
+        } =
+          gateway?.has(call.function.name) === true
+            ? await gateway.call(call.function.name, args)
+            : await this.#runTool(request, controller, call.id, call.function.name, args);
         controller.emit({
           type: "tool_result",
           callId: call.id,
@@ -327,6 +470,12 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  #reasoning(): { reasoning_effort?: string } {
+    return this.#config.reasoningEffort === undefined
+      ? {}
+      : { reasoning_effort: this.#config.reasoningEffort };
   }
 
   async #request(

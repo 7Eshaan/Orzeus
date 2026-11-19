@@ -52,6 +52,17 @@ routed back to Orzeus's policy engine, which auto-allows, denies, or queues it f
   `thread/tokenUsage/updated`, quota from `account/rateLimits/*` (window names derive from
   `windowDurationMins`, e.g. a 30-day free-plan window shows as `30d`). Opt-in in the CLI.
 
+### Added in Phase 3
+
+- Structured output (`generate`) on `openai-compatible`, `codex-app-server`, `anthropic-api`
+  and `gemini-api`, used by the planner. Schemas are rewritten to the portable strict subset
+  (`toStrictJsonSchema`) and answers are always validated with Zod.
+- `openai-compatible` falls back from `response_format: json_schema` to a single forced tool
+  call when the runtime returns 400 or 501 for constrained output, and supports `reasoning_effort`.
+- `openai-compatible` workers receive the run's MCP gateway as extra tools.
+- The Anthropic and Gemini adapters are tested against fixtures written from their docs, not
+  recordings; re-record once keys are available.
+
 ## How work is routed
 
 For a node with tier `T` and ordered `candidates`, the router picks the first candidate whose:

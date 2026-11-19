@@ -1,6 +1,13 @@
 /**
  * @orzeus/memory-server
  *
- * orzeus-memory: a standalone MCP server (stdio) for persistent repo decisions, constraints and conventions, backed by its own memory.db.
+ * orzeus-memory: persistent, searchable repository memory served over MCP.
  */
-export {};
+export {
+  ftsQuery,
+  MEMORY_KINDS,
+  type Memory,
+  type MemoryKind,
+  MemoryStore,
+} from "./memory-store.js";
+export { createMemoryServer, MEMORY_SERVER_NAME } from "./server.js";

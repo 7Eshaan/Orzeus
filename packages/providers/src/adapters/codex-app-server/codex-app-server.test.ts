@@ -104,3 +104,36 @@ describe.skipIf(!existsSync(SESSION))("codex-app-server (recorded)", () => {
     expect(start).toMatchObject({ sandbox: "workspace-write", approvalPolicy: "on-request" });
   });
 });
+
+describe("codex-app-server generate (hand-written fixture)", () => {
+  it("runs an ephemeral read-only turn with outputSchema and parses the final message", async () => {
+    const { z } = await import("zod");
+    const Answer = z.object({ answer: z.string(), confidence: z.number() });
+    const adapter = new CodexAppServerAdapter({
+      clientVersion: "0.0.0",
+      command: [process.execPath, FAKE, join(DIR, "generate-handwritten.jsonl")],
+    });
+    const result = await adapter.generate(
+      {
+        model: "gpt-6-luna",
+        system: "Plan.",
+        prompt: "Answer.",
+        output: {
+          name: "answer",
+          jsonSchema: z.toJSONSchema(Answer) as Record<string, unknown>,
+          parse: (v) => Answer.parse(v),
+        },
+        maxOutputTokens: 1000,
+      },
+      TEST_ACCOUNT,
+      AbortSignal.timeout(10_000),
+    );
+    expect(result.value).toEqual({ answer: "from codex", confidence: 0.75 });
+    expect(result.usage).toMatchObject({
+      inputTokens: 1000,
+      cacheReadTokens: 200,
+      outputTokens: 300,
+      reasoningTokens: 40,
+    });
+  });
+});

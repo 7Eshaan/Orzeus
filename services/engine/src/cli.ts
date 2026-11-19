@@ -2,36 +2,57 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
+import { buildRepoMap, describeTooling, renderRepoMap } from "@orzeus/context";
 import type { RunState } from "@orzeus/core";
-import type { ProjectId, RunId } from "@orzeus/schema";
+import { MEMORY_KINDS, type MemoryKind } from "@orzeus/memory-server";
+import type { PlannerOutput, ProjectId, RunId } from "@orzeus/schema";
 import { exportJsonl } from "@orzeus/trace";
-import { createEngine } from "./compose.js";
+import { createEngine, type Engine } from "./compose.js";
 import { ulid } from "./ids.js";
 import { createJsonLogger } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
+import { checkCommandsExist } from "./plan-checks.js";
 import { expandHandPlan, PlanFileError } from "./plan-file.js";
+import { PlanningError, planGoal } from "./planner.js";
 import { ENGINE_VERSION } from "./version.js";
+
+const DEFAULT_LOCAL_MODEL = "openai-compatible:lfm3:latest";
 
 const USAGE = `orzeus ${ENGINE_VERSION}: headless Orzeus
 
 Usage:
-  orzeus run <plan.json> --repo <path> --approve-plan [--base <ref>] [--approve-asks] [--enable-codex]
-  orzeus resume <runId> [--approve-asks] [--enable-codex]
-  orzeus status <runId>
-  orzeus verify <runId>
-  orzeus export <runId>
+  orzeus run --goal "<what to build>" --repo <path> [--planner <adapter:model>] [--worker <adapter:model>]
+  orzeus run <plan.json> --repo <path>                 (hand-written plan)
+  orzeus resume <runId>
+  orzeus status <runId> | verify <runId> | export <runId>
+  orzeus memory add --repo <path> --kind <${MEMORY_KINDS.join("|")}> --title <t> --body <b> [--paths a,b]
+  orzeus memory search --repo <path> <query> | memory list --repo <path>
 
 Options:
-  --data-dir <dir>      Database and worktrees (default: ${defaultDataDir()})
-  --ollama-url <url>    OpenAI-compatible endpoint for local workers (default: http://localhost:11434/v1)
-  --enable-codex        Allow Codex workers (uses your own Codex login and quota)
+  --approve-plan        Execute the plan without asking (otherwise you are asked in a terminal)
   --approve-asks        Allow actions the policy would ask a human about (headless only)
+  --planner <spec>      Default: anthropic-api:claude-opus-5-5 if ANTHROPIC_API_KEY is set, else ${DEFAULT_LOCAL_MODEL}
+  --worker <spec>       Default: ${DEFAULT_LOCAL_MODEL}
+  --base <ref>          Commit to start from (default HEAD)
+  --data-dir <dir>      Database, memory and worktrees (default: ${defaultDataDir()})
+  --ollama-url <url>    OpenAI-compatible endpoint for local models (default: http://localhost:11434/v1)
+  --local-reasoning <none|low|medium|high>  reasoning_effort for local models (small thinking models need none)
+  --enable-codex        Allow Codex workers (uses your own Codex login and quota)
+  --no-gateway          Do not start the MCP gateway
   --verbose             Structured engine logs on stderr
 `;
 
 const write = (line: string) => process.stdout.write(`${line}\n`);
 const say = (line: string) => process.stderr.write(`${line}\n`);
+
+class UsageError extends Error {}
+
+function reasoningEffort(value: string): "none" | "low" | "medium" | "high" {
+  if (value === "none" || value === "low" || value === "medium" || value === "high") return value;
+  throw new UsageError(`--local-reasoning must be none, low, medium or high`);
+}
 
 function summary(state: RunState): string {
   const nodes = state.nodeOrder.map((id) => {
@@ -47,26 +68,80 @@ function summary(state: RunState): string {
   ].join("\n");
 }
 
+export function describePlan(plan: PlannerOutput): string {
+  return plan.dag.nodes
+    .map((n, i) => {
+      const packet = plan.packets.find((p) => p.nodeId === n.id);
+      const checks =
+        n.checks.map((c) => (c.kind === "command" ? c.argv.join(" ") : c.label)).join("; ") ||
+        "none";
+      return [
+        `${i + 1}. ${n.id}: ${n.title}`,
+        `   writes: ${n.writeScope.join(", ") || "(read-only)"}    depends on: ${n.dependsOn.join(", ") || "-"}`,
+        `   checks: ${checks}`,
+        `   worker: ${n.candidates[0]?.adapter}/${n.candidates[0]?.model}    context pointers: ${packet?.context.length ?? 0}`,
+        `   ${packet?.objective ?? ""}`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+async function confirm(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return /^y(es)?$/i.test((await rl.question(question)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
+async function repoOf(engine: Engine, path: string | undefined): Promise<string> {
+  if (path === undefined) throw new UsageError("--repo is required");
+  return engine.git.topLevel(resolve(path));
+}
+
+function projectFor(engine: Engine, root: string, defaultBranch: string): ProjectId {
+  const id = `project-${createHash("sha256").update(root).digest("hex").slice(0, 16)}` as ProjectId;
+  engine.store.ensureProject({
+    id,
+    name: root.split("/").at(-1) ?? root,
+    repoRoot: root,
+    defaultBranch,
+    createdAt: Date.now(),
+  });
+  return id;
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: [...argv],
     allowPositionals: true,
     options: {
+      goal: { type: "string" },
       repo: { type: "string" },
       base: { type: "string", default: "HEAD" },
+      planner: { type: "string" },
+      worker: { type: "string", default: DEFAULT_LOCAL_MODEL },
+      kind: { type: "string" },
+      title: { type: "string" },
+      body: { type: "string" },
+      paths: { type: "string" },
       "data-dir": { type: "string" },
       "ollama-url": { type: "string" },
+      "local-reasoning": { type: "string" },
       "enable-codex": { type: "boolean", default: false },
       "approve-plan": { type: "boolean", default: false },
       "approve-asks": { type: "boolean", default: false },
+      "no-gateway": { type: "boolean", default: false },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
     },
   });
-  const [command, target] = positionals;
-  if (values.help || command === undefined || target === undefined) {
+  const [command, target, ...rest] = positionals;
+  if (values.help || command === undefined) {
     write(USAGE);
-    return command === undefined && !values.help ? 2 : 0;
+    return values.help ? 0 : 2;
   }
 
   const engine = createEngine({
@@ -76,34 +151,75 @@ async function main(argv: readonly string[]): Promise<number> {
     }),
     approveAsks: values["approve-asks"],
     enableCodex: values["enable-codex"],
+    gateway: !values["no-gateway"],
     ...(values["ollama-url"] === undefined ? {} : { openAiCompatibleUrl: values["ollama-url"] }),
+    ...(values["local-reasoning"] === undefined
+      ? {}
+      : { localReasoningEffort: reasoningEffort(values["local-reasoning"]) }),
     progress: say,
   });
 
   try {
     switch (command) {
       case "run": {
-        if (values.repo === undefined) throw new UsageError("--repo is required");
-        const root = await engine.git.topLevel(resolve(values.repo));
+        const root = await repoOf(engine, values.repo);
         const baseCommit = await engine.git.revParse(root, values.base);
+        const repo = { root, baseRef: values.base, baseCommit };
         const runId = ulid() as RunId;
-        const plan = expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, {
-          root,
-          baseRef: values.base,
-          baseCommit,
-        });
-        const projectId =
-          `project-${createHash("sha256").update(root).digest("hex").slice(0, 16)}` as ProjectId;
-        engine.store.ensureProject({
-          id: projectId,
-          name: root.split("/").at(-1) ?? root,
-          repoRoot: root,
-          defaultBranch: values.base,
-          createdAt: Date.now(),
-        });
-        engine.orchestrator.createRun(projectId, plan);
-        if (!values["approve-plan"]) {
-          say(`Plan recorded but not approved. Re-run with --approve-plan to execute it.`);
+        const projectId = projectFor(engine, root, values.base);
+        let plan: PlannerOutput;
+
+        if (target !== undefined) {
+          plan = expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, repo);
+          engine.orchestrator.createRun(projectId, plan);
+        } else {
+          if (values.goal === undefined) throw new UsageError("give a plan file or --goal");
+          const plannerSpec =
+            values.planner ??
+            (engine.planners.has("anthropic-api")
+              ? "anthropic-api:claude-opus-5-5"
+              : DEFAULT_LOCAL_MODEL);
+          const planner = engine.planner(plannerSpec);
+          const worker = engine.workerModel(values.worker);
+          engine.orchestrator.startRun(projectId, runId, values.goal, repo);
+          say(`Run ${runId}: planning with ${plannerSpec}…`);
+          const map = await buildRepoMap(engine.git, root);
+          const memories = engine.memory.search(root, values.goal, 8);
+          try {
+            const result = await planGoal({
+              goal: values.goal,
+              runId,
+              repo,
+              repoMap: renderRepoMap(map),
+              tooling: describeTooling(root),
+              validate: (candidate) => checkCommandsExist(candidate, root),
+              memories,
+              planner,
+              tiers: { worker: [worker], local: [worker] },
+              signal: AbortSignal.timeout(600_000),
+            });
+            for (const warning of result.warnings) say(`  note: ${warning}`);
+            plan = result.plan;
+            engine.orchestrator.proposePlan(plan, result.calls);
+            say(`Plan: ${result.summary}`);
+          } catch (error) {
+            if (error instanceof PlanningError) {
+              engine.orchestrator.failPlanning(runId, error.calls, error.message);
+              return 1;
+            }
+            throw error;
+          }
+        }
+
+        say(describePlan(plan));
+        const approved =
+          values["approve-plan"] || (await confirm("Approve this plan and start? [y/N] "));
+        if (!approved) {
+          say(
+            process.stdin.isTTY
+              ? "Not approved."
+              : "Plan recorded but not approved. Re-run with --approve-plan to execute it.",
+          );
           write(runId);
           return 2;
         }
@@ -113,17 +229,19 @@ async function main(argv: readonly string[]): Promise<number> {
         return final.status === "completed" ? 0 : 1;
       }
       case "resume": {
+        if (target === undefined) throw new UsageError("resume needs a run id");
         const final = await engine.orchestrator.resume(target as RunId);
         write(summary(final));
         return final.status === "completed" ? 0 : 1;
       }
       case "status": {
-        const state = engine.store.load(target as RunId);
-        if (state === null) throw new UsageError(`unknown run ${target}`);
+        const state = target === undefined ? null : engine.store.load(target as RunId);
+        if (state === null) throw new UsageError(`unknown run ${target ?? ""}`);
         write(summary(state));
         return 0;
       }
       case "verify": {
+        if (target === undefined) throw new UsageError("verify needs a run id");
         const result = engine.store.verify(target as RunId);
         write(
           result.ok
@@ -133,8 +251,36 @@ async function main(argv: readonly string[]): Promise<number> {
         return result.ok ? 0 : 1;
       }
       case "export":
+        if (target === undefined) throw new UsageError("export needs a run id");
         process.stdout.write(exportJsonl(engine.store.events(target as RunId)));
         return 0;
+      case "memory": {
+        const root = await repoOf(engine, values.repo);
+        if (target === "add") {
+          const kind = values.kind as MemoryKind | undefined;
+          if (kind === undefined || !MEMORY_KINDS.includes(kind) || !values.title || !values.body) {
+            throw new UsageError("memory add needs --kind, --title and --body");
+          }
+          const memory = engine.memory.add({
+            repoRoot: root,
+            kind,
+            title: values.title,
+            body: values.body,
+            paths: values.paths?.split(",").filter(Boolean) ?? [],
+          });
+          write(memory.id);
+          return 0;
+        }
+        const found =
+          target === "search"
+            ? engine.memory.search(root, rest.join(" "), 20)
+            : target === "list"
+              ? engine.memory.list(root)
+              : null;
+        if (found === null) throw new UsageError("memory add | search | list");
+        for (const m of found) write(`${m.id}  ${m.kind.padEnd(10)}  ${m.title}`);
+        return 0;
+      }
       default:
         throw new UsageError(`unknown command ${command}`);
     }
@@ -142,8 +288,6 @@ async function main(argv: readonly string[]): Promise<number> {
     engine.close();
   }
 }
-
-class UsageError extends Error {}
 
 main(process.argv.slice(2)).then(
   (code) => {

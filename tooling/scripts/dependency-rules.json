@@ -9,9 +9,9 @@
     "@orzeus/store": ["@orzeus/schema", "@orzeus/core", "@orzeus/trace"],
     "@orzeus/git": ["@orzeus/schema"],
     "@orzeus/checks": ["@orzeus/schema", "@orzeus/core"],
-    "@orzeus/mcp-gateway": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/mcp-gateway": ["@orzeus/schema", "@orzeus/core", "@orzeus/context"],
     "@orzeus/providers": ["@orzeus/schema", "@orzeus/core"],
-    "@orzeus/memory-server": ["@orzeus/schema"],
+    "@orzeus/memory-server": [],
     "@orzeus/engine": [
       "@orzeus/schema",
       "@orzeus/core",
@@ -21,8 +21,11 @@
       "@orzeus/git",
       "@orzeus/checks",
       "@orzeus/mcp-gateway",
-      "@orzeus/providers"
+      "@orzeus/providers",
+      "@orzeus/context",
+      "@orzeus/memory-server"
     ],
-    "@orzeus/desktop": ["@orzeus/protocol", "@orzeus/schema"]
+    "@orzeus/desktop": ["@orzeus/protocol", "@orzeus/schema"],
+    "@orzeus/context": ["@orzeus/schema", "@orzeus/core", "@orzeus/git"]
   }
 }

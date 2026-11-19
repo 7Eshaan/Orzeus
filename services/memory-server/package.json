@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "orzeus-memory: a standalone MCP server (stdio) for persistent repo decisions, constraints and conventions, backed by its own memory.db.",
+  "bin": {
+    "orzeus-memory": "./dist/main.js"
+  },
   "exports": {
     ".": {
       "@orzeus/source": "./src/index.ts",
@@ -13,5 +16,12 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
+  }
 }

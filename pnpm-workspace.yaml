@@ -24,3 +24,10 @@ minimumReleaseAgeExclude:
   - "@vitest/spy@5.1.1"
   - fast-check@4.10.3
   - vitest@5.1.1
+
+# Grammar packages are used only for their prebuilt .wasm files (see packages/context);
+# their native install scripts must never run.
+allowBuilds:
+  tree-sitter-javascript: false
+  tree-sitter-python: false
+  tree-sitter-typescript: false

@@ -1,4 +1,13 @@
-import type { AccountId, ApprovalDecision, QuotaWindow, TokenUsage } from "@orzeus/schema";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type AccountId,
+  type ApprovalDecision,
+  type QuotaWindow,
+  type TokenUsage,
+  ZERO_USAGE,
+} from "@orzeus/schema";
 import type {
   AccountContext,
   AdapterManifest,
@@ -9,6 +18,13 @@ import type {
 } from "../../adapter.js";
 import { SessionController } from "../../session.js";
 import { shellWords } from "../../shell-words.js";
+import {
+  type GenerateRequest,
+  type GenerateResult,
+  parseJsonOutput,
+  StructuredOutputError,
+  toStrictJsonSchema,
+} from "../../structured.js";
 import { CodexRpc } from "./rpc.js";
 
 export interface CodexAppServerConfig {
@@ -29,7 +45,7 @@ export const CODEX_APP_SERVER_MANIFEST: AdapterManifest = {
     { kind: "api_key", secretName: "openai", envVar: "OPENAI_API_KEY" },
   ],
   capabilities: {
-    structuredOutput: false,
+    structuredOutput: true,
     agentSession: true,
     mcpClient: true,
     resume: true,
@@ -227,6 +243,87 @@ export class CodexAppServerAdapter implements ProviderAdapter {
       return toQuotaWindows(account.accountId, result.rateLimits, Date.now());
     } finally {
       rpc.kill();
+    }
+  }
+
+  /**
+   * One-shot structured output (planning, review): an ephemeral, read-only thread in an empty
+   * temporary directory, with the turn's outputSchema set, so Codex cannot touch any repository.
+   */
+  async generate<T>(
+    request: GenerateRequest<T>,
+    account: AccountContext,
+    signal: AbortSignal,
+  ): Promise<GenerateResult<T>> {
+    const started = Date.now();
+    const dir = await mkdtemp(join(tmpdir(), "orzeus-codex-generate-"));
+    const rpc = await this.#spawn(dir, account);
+    const abort = () => rpc.kill();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      let usage: TokenUsage = ZERO_USAGE;
+      const messages: string[] = [];
+      const quota: QuotaWindow[] = [];
+      const done = new Promise<{ status: string; error: string | null }>((resolve, reject) => {
+        void rpc.exited.then((code) =>
+          reject(new Error(`codex app-server exited with code ${code}`)),
+        );
+        rpc.onNotification((method, params) => {
+          const p = params as Record<string, unknown>;
+          if (method === "item/completed") {
+            const item = p["item"] as Record<string, unknown> | undefined;
+            if (item?.["type"] === "agentMessage") messages.push(String(item["text"] ?? ""));
+          } else if (method === "thread/tokenUsage/updated") {
+            usage = toUsage((p["tokenUsage"] as { total: Breakdown }).total);
+          } else if (method === "account/rateLimits/updated") {
+            const limits = p["rateLimits"] as
+              | { primary: RateWindow | null; secondary: RateWindow | null }
+              | undefined;
+            if (limits)
+              quota.splice(
+                0,
+                quota.length,
+                ...toQuotaWindows(account.accountId, limits, Date.now()),
+              );
+          } else if (method === "turn/completed") {
+            const turn = p["turn"] as { status: string; error: { message: string } | null };
+            resolve({ status: turn.status, error: turn.error?.message ?? null });
+          }
+        });
+      });
+      await this.#initialize(rpc);
+      const thread = await rpc.request<{ thread: { id: string } }>("thread/start", {
+        cwd: dir,
+        model: request.model,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        ephemeral: true,
+        developerInstructions: request.system,
+        serviceName: "orzeus",
+      });
+      await rpc.request("turn/start", {
+        threadId: thread.thread.id,
+        input: [{ type: "text", text: request.prompt, text_elements: [] }],
+        outputSchema: toStrictJsonSchema(request.output.jsonSchema),
+      });
+      const result = await done;
+      const text = messages.at(-1) ?? "";
+      if (result.status !== "completed")
+        throw new StructuredOutputError(
+          `${request.output.name}: turn ${result.status}: ${result.error ?? ""}`,
+          text,
+        );
+      return {
+        value: parseJsonOutput(text, request.output),
+        usage,
+        costMicroUsd: null,
+        quota,
+        latencyMs: Date.now() - started,
+      };
+    } finally {
+      signal.removeEventListener("abort", abort);
+      rpc.kill();
+      await rm(dir, { recursive: true, force: true });
     }
   }
 

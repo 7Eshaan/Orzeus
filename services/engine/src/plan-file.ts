@@ -4,11 +4,13 @@ import {
   type ContextPacketBody,
   ContextRef,
   EscalationPolicy,
+  type McpToolGrant,
   ModelRef,
   NodeBudget,
   NodeId,
   NodeKind,
   type PacketId,
+  type PlanDraft,
   PlannerOutput,
   type RepoRef,
   RetryPolicy,
@@ -19,6 +21,13 @@ import {
   ToolAllowlist,
 } from "@orzeus/schema";
 import { z } from "zod";
+
+/** Tools every packet gets by default: read the repository memory; proposing memories needs approval. */
+export const DEFAULT_MCP_GRANTS: readonly McpToolGrant[] = [
+  { server: "memory", tool: "memory_search", access: "read", loading: "eager" },
+  { server: "memory", tool: "memory_get", access: "read", loading: "eager" },
+  { server: "memory", tool: "memory_propose", access: "write", loading: "lazy" },
+];
 
 /**
  * A hand-written plan: the planner's output shape with ids, repo and run details filled in by
@@ -181,4 +190,102 @@ export function expandHandPlan(input: unknown, runId: RunId, repo: RepoRef): Pla
 
 export function nodeIdOf(value: string): NodeId {
   return NodeId.parse(value);
+}
+
+export interface TierModels {
+  readonly worker: readonly ModelRef[];
+  readonly local: readonly ModelRef[];
+}
+
+const slug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64) || "task";
+
+/**
+ * Converts the planner's draft into a hand-plan shape (then expandHandPlan validates it).
+ * Orzeus, not the model, chooses worker models (by tier), budgets and tool grants. Pointers
+ * missing required fields are dropped and reported, rather than failing the plan.
+ */
+export function draftToHandPlan(
+  draft: PlanDraft,
+  goal: string,
+  tiers: TierModels,
+): { plan: unknown; dropped: string[] } {
+  const dropped: string[] = [];
+  const ids = new Map(draft.nodes.map((n) => [n.id, slug(n.id)]));
+  const nodes = draft.nodes.map((n) => {
+    const context = n.context.flatMap((ref): Record<string, unknown>[] => {
+      if (ref.kind === "file_range" && ref.path && ref.startLine !== null && ref.endLine !== null) {
+        return [
+          {
+            kind: "file_range",
+            path: ref.path,
+            startLine: Math.max(1, ref.startLine),
+            endLine: Math.max(ref.startLine, ref.endLine),
+            why: ref.why || "context",
+          },
+        ];
+      }
+      if (ref.kind === "symbol" && ref.path && ref.symbol) {
+        return [
+          {
+            kind: "symbol",
+            path: ref.path,
+            symbol: ref.symbol,
+            symbolKind: "function",
+            why: ref.why || "context",
+          },
+        ];
+      }
+      if (ref.kind === "memory" && ref.memoryId)
+        return [{ kind: "memory", memoryId: ref.memoryId, why: ref.why || "context" }];
+      dropped.push(`${n.id}: dropped an incomplete ${ref.kind} pointer`);
+      return [];
+    });
+    const checks = n.checks
+      .filter((c) => c.argv.length > 0 && c.argv[0] !== "")
+      .map((c) => ({
+        kind: "command",
+        id: slug(c.id),
+        label: c.label || c.argv.join(" "),
+        argv: c.argv,
+        cwd: ".",
+        timeoutMs: 120_000,
+        expectExitCode: 0,
+      }));
+    const checkIds = new Set(checks.map((c) => c.id));
+    return {
+      id: ids.get(n.id),
+      title: n.title,
+      kind: n.kind,
+      dependsOn: n.dependsOn.map((d) => ids.get(d) ?? slug(d)),
+      tier: n.tier,
+      candidates: n.tier === "local" && tiers.local.length > 0 ? tiers.local : tiers.worker,
+      writeScope: n.writeScope,
+      checks,
+      packet: {
+        objective: n.objective,
+        nonGoals: n.nonGoals,
+        acceptance: (n.acceptance.length > 0
+          ? n.acceptance
+          : [{ statement: n.objective, checkId: null }]
+        ).map((a) => ({
+          statement: a.statement,
+          checkId: a.checkId !== null && checkIds.has(slug(a.checkId)) ? slug(a.checkId) : null,
+        })),
+        context,
+        constraints: n.constraints,
+        tools: {
+          mcp: [...DEFAULT_MCP_GRANTS],
+          builtin: [{ kind: "read_files" }, { kind: "edit_files" }],
+          network: "none",
+          networkAllowlist: [],
+        },
+      },
+    };
+  });
+  return { plan: { goal, nodes }, dropped };
 }

@@ -34,6 +34,8 @@ orzeus/
 │  │                            checkpoints. Implements core's EventStore / BlobStore ports.
 │  ├─ trace/                    Canonical JSON (RFC 8785), hash chain, verifier, JSONL and
 │  │                            OTLP exporters.
+│  ├─ context/                  Repo map and symbol index (tree-sitter WASM grammars),
+│  │                            resolution of packet pointers to exact code.
 │  ├─ git/                      Worktree manager over the git CLI (argv only, no shell).
 │  ├─ checks/                   Deterministic check runner (typecheck, lint, test commands),
 │  │                            output capture and truncation.

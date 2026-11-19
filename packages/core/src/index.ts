@@ -13,6 +13,12 @@ export {
 } from "./budget.js";
 export { globToRegExp, matchesAny, normalizeRelativePath, scopesMayOverlap } from "./glob.js";
 export { type PlanIssue, type PlanValidation, validatePlan } from "./plan-validation.js";
+export {
+  PLANNER_SYSTEM_PROMPT,
+  type PlannerMemory,
+  renderPlannerPrompt,
+  renderRepairPrompt,
+} from "./planner-prompt.js";
 export { evaluatePolicy, type PolicyContext, type PolicyVerdict } from "./policy.js";
 export type { Clock, Random, RunEventStore } from "./ports.js";
 export { renderPacketPrompt } from "./prompt.js";

@@ -31,6 +31,15 @@
     },
     {
       "path": "../../packages/trace"
+    },
+    {
+      "path": "../../packages/context"
+    },
+    {
+      "path": "../../packages/mcp-gateway"
+    },
+    {
+      "path": "../../services/memory-server"
     }
   ]
 }

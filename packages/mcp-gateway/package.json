@@ -15,7 +15,11 @@
     "dist"
   ],
   "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "@orzeus/context": "workspace:*",
+    "@orzeus/core": "workspace:*",
     "@orzeus/schema": "workspace:*",
-    "@orzeus/core": "workspace:*"
+    "zod": "4.6.7"
   }
 }

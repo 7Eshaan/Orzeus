@@ -1,0 +1,10 @@
+{"dir":"client","msg":{"id":1,"method":"initialize","params":{}}}
+{"dir":"server","msg":{"id":1,"result":{"userAgent":"codex-fixture","codexHome":"/Users/user/.codex","platformFamily":"unix","platformOs":"macos"}}}
+{"dir":"client","msg":{"method":"initialized"}}
+{"dir":"client","msg":{"id":2,"method":"thread/start","params":{}}}
+{"dir":"server","msg":{"id":2,"result":{"thread":{"id":"thread-fixture"}}}}
+{"dir":"client","msg":{"id":3,"method":"turn/start","params":{}}}
+{"dir":"server","msg":{"id":3,"result":{"turn":{"id":"turn-fixture"}}}}
+{"dir":"server","msg":{"method":"item/completed","params":{"threadId":"thread-fixture","turnId":"turn-fixture","completedAtMs":1,"item":{"type":"agentMessage","id":"msg-1","text":"{\"answer\":\"from codex\",\"confidence\":0.75}"}}}}
+{"dir":"server","msg":{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-fixture","turnId":"turn-fixture","tokenUsage":{"total":{"totalTokens":1500,"inputTokens":1200,"cachedInputTokens":200,"cacheWriteInputTokens":0,"outputTokens":300,"reasoningOutputTokens":40},"last":{"totalTokens":1500,"inputTokens":1200,"cachedInputTokens":200,"cacheWriteInputTokens":0,"outputTokens":300,"reasoningOutputTokens":40},"modelContextWindow":null}}}}
+{"dir":"server","msg":{"method":"turn/completed","params":{"threadId":"thread-fixture","turn":{"id":"turn-fixture","status":"completed","error":null}}}}

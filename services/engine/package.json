@@ -22,9 +22,13 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@orzeus/checks": "workspace:*",
+    "@orzeus/context": "workspace:*",
     "@orzeus/core": "workspace:*",
     "@orzeus/git": "workspace:*",
+    "@orzeus/mcp-gateway": "workspace:*",
+    "@orzeus/memory-server": "workspace:*",
     "@orzeus/protocol": "workspace:*",
     "@orzeus/providers": "workspace:*",
     "@orzeus/schema": "workspace:*",

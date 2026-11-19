@@ -8,4 +8,8 @@ Standalone: usable without the rest of Orzeus.
 
 ## Status
 
-Skeleton (Phase 0). See [docs/plan/phased-plan.md](../../docs/plan/phased-plan.md) for when it gets built.
+Implemented in Phase 3. `orzeus-memory --db <memory.db> --repo <root>` serves one repository's
+memory over MCP stdio: `memory_search` and `memory_get` (annotated read-only), `memory_propose`
+and `memory_supersede` (writes, so the gateway's policy asks a human), and `memory://{id}`
+resources. Search is SQLite FTS5 with user text always quoted, never passed as FTS syntax. The
+engine also reads the same `MemoryStore` directly when planning, and `orzeus memory add` seeds it.

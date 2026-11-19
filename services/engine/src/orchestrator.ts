@@ -13,6 +13,7 @@ import {
   renderPacketPrompt,
 } from "@orzeus/core";
 import type { Git, WorktreeManager } from "@orzeus/git";
+import type { GatewayCall, GatewayDecision, McpGateway } from "@orzeus/mcp-gateway";
 import type {
   AdapterEvent,
   AdapterRegistry,
@@ -26,10 +27,12 @@ import {
   type ContextPacketBody,
   type EventDraft,
   type GitOid,
+  type ModelRef,
   type NodeId,
   type PlannerOutput,
   type PolicyDocument,
   type ProjectId,
+  type ProposedAction,
   type RunId,
   type Sha256,
   type TaskNode,
@@ -55,6 +58,16 @@ export interface OrchestratorOptions {
   readonly approveAsks: boolean;
   /** Human-readable progress lines (the CLI prints them). */
   readonly progress?: (line: string) => void;
+  /** Starts a run's MCP gateway with its upstream servers. Without it, workers get no gateway. */
+  readonly openGateway?: (state: RunState) => Promise<McpGateway>;
+}
+
+/** One planner model call, recorded in the trace when the plan is proposed. */
+export interface PlanningRecord {
+  readonly model: ModelRef;
+  readonly usage: TraceEventPayload<"model.call">["usage"];
+  readonly costMicroUsd: number | null;
+  readonly latencyMs: number;
 }
 
 const ENGINE: Actor = { kind: "engine" };
@@ -71,18 +84,28 @@ export class RunOrchestrator {
   readonly #o: OrchestratorOptions;
   readonly #traceIds = new Map<RunId, string>();
   readonly #active = new Map<string, Promise<void>>();
+  readonly #gateways = new Map<RunId, Promise<McpGateway | null>>();
 
   constructor(options: OrchestratorOptions) {
     this.#o = options;
   }
 
-  /** Records a new run with its plan and packets, awaiting plan approval. */
+  /** Records a new run with a ready-made (hand-written) plan, awaiting plan approval. */
   createRun(projectId: ProjectId, plan: PlannerOutput): RunId {
+    this.startRun(projectId, plan.dag.runId, plan.dag.goal, plan.dag.repo);
+    return this.proposePlan(plan, []);
+  }
+
+  /** Records that a run exists before its plan does, so planning is part of its trace. */
+  startRun(projectId: ProjectId, runId: RunId, goal: string, repo: RunState["repo"]): void {
+    this.#append(runId, [this.#draft(runId, "run.created", { projectId, goal, repo })]);
+  }
+
+  /** Records the planner's model calls, issues every packet, and proposes the plan. */
+  proposePlan(plan: PlannerOutput, planning: readonly PlanningRecord[]): RunId {
     const { dag, packets } = plan;
     const runId = dag.runId;
-    this.#append(runId, [
-      this.#draft(runId, "run.created", { projectId, goal: dag.goal, repo: dag.repo }),
-    ]);
+    if (planning.length > 0) this.#append(runId, this.#planningDrafts(runId, planning));
     const issued: EventDraft[] = packets.map((body) => {
       const packet = this.#sealPacket(body);
       const blob = this.#o.store.blobs.put(
@@ -102,6 +125,36 @@ export class RunOrchestrator {
     ]);
     this.#say(`Run ${runId}: plan with ${dag.nodes.length} nodes is waiting for approval.`);
     return runId;
+  }
+
+  /** Records the planner's calls and fails the run when no valid plan could be produced. */
+  failPlanning(runId: RunId, planning: readonly PlanningRecord[], message: string): RunState {
+    this.#say(`Run ${runId}: planning failed: ${message}`);
+    return this.#append(runId, [
+      ...this.#planningDrafts(runId, planning),
+      this.#draft(runId, "run.failed", {
+        errorClass: "planning.failed",
+        message: message.slice(0, 2_000),
+      }),
+    ]);
+  }
+
+  #planningDrafts(runId: RunId, planning: readonly PlanningRecord[]): EventDraft[] {
+    return planning.map((c) =>
+      this.#draft(
+        runId,
+        "model.call",
+        {
+          model: c.model,
+          tier: "frontier",
+          purpose: "plan",
+          usage: c.usage,
+          costMicroUsd: c.costMicroUsd,
+          latencyMs: c.latencyMs,
+        },
+        { actor: { kind: "model", model: c.model, tier: "frontier" } },
+      ),
+    );
   }
 
   approvePlan(runId: RunId, edited = false): void {
@@ -149,6 +202,16 @@ export class RunOrchestrator {
 
   /** Runs the approved plan until it settles. */
   async execute(runId: RunId): Promise<RunState> {
+    try {
+      return await this.#execute(runId);
+    } finally {
+      const gateway = this.#gateways.get(runId);
+      this.#gateways.delete(runId);
+      await (await gateway)?.close();
+    }
+  }
+
+  async #execute(runId: RunId): Promise<RunState> {
     for (;;) {
       const state = this.#state(runId);
       if (TERMINAL_RUN_STATUSES.has(state.status)) return state;
@@ -326,24 +389,41 @@ export class RunOrchestrator {
 
     const startSession = pick.entry.adapter.startSession;
     if (startSession === undefined) throw new Error(`${pick.model.adapter} cannot run sessions`);
-    const session = startSession.call(
-      pick.entry.adapter,
-      {
+    const at = { nodeId, attempt };
+    const gateway = await this.#gatewayFor(runId);
+    const token =
+      gateway?.grant({
         runId,
         nodeId,
         attempt,
-        model: pick.model.model,
+        worktree: worktree.path,
         packet,
-        prompt: renderPacketPrompt(packet, task.checks, task.writeScope),
-        worktree,
-        mcp: null,
-        budget: task.budget,
-        resume: null,
-      },
-      pick.entry.account,
-    );
+        authorize: (call) => this.#authorizeMcp(runId, at, task, packet, call),
+        record: (call) => this.#recordMcp(runId, at, call),
+      }) ?? null;
 
-    const outcome = await this.#watch(runId, nodeId, attempt, task, session);
+    let outcome: SessionOutcome;
+    try {
+      const session = startSession.call(
+        pick.entry.adapter,
+        {
+          runId,
+          nodeId,
+          attempt,
+          model: pick.model.model,
+          packet,
+          prompt: renderPacketPrompt(packet, task.checks, task.writeScope),
+          worktree,
+          mcp: gateway === null || token === null ? null : { url: gateway.url, token },
+          budget: task.budget,
+          resume: null,
+        },
+        pick.entry.account,
+      );
+      outcome = await this.#watch(runId, nodeId, attempt, task, session);
+    } finally {
+      if (token !== null) gateway?.revoke(token);
+    }
     if (outcome.status !== "completed") {
       const kind: FailureKind =
         outcome.status === "budget_exceeded"
@@ -605,7 +685,26 @@ export class RunOrchestrator {
       this.#say(`${at.nodeId}: denied ${event.action.kind} (${verdict.ruleId}).`);
       return "denied";
     }
-    // "ask": a human gate. Headless mode has no human, so it records the request and decides now.
+    const approved = this.#askHuman(runId, at, event.action, verdict.ruleId);
+    await session.respond(
+      event.requestId,
+      approved
+        ? { kind: "allow_once" }
+        : { kind: "deny", reason: "A human gate was not approved." },
+    );
+    return approved ? "approved" : "denied";
+  }
+
+  /**
+   * A human gate. Headless runs have no human, so the policy actor decides (deny, unless the
+   * run allows asks), and both the request and the decision are recorded.
+   */
+  #askHuman(
+    runId: RunId,
+    at: { nodeId: NodeId; attempt: number },
+    action: ProposedAction,
+    ruleId: string,
+  ): boolean {
     const approvalId = `ap-${randomHex(8)}` as ApprovalId;
     const decision = this.#o.approveAsks
       ? ({ kind: "allow_once" } as const)
@@ -618,7 +717,7 @@ export class RunOrchestrator {
       ruleId: this.#o.approveAsks ? "headless_approve_asks" : "headless_deny_asks",
     };
     this.#append(runId, [
-      this.#draft(runId, "approval.requested", { approvalId, action: event.action }, at),
+      this.#draft(runId, "approval.requested", { approvalId, action }, at),
       this.#draft(
         runId,
         "approval.resolved",
@@ -626,11 +725,77 @@ export class RunOrchestrator {
         { ...at, actor: policyActor },
       ),
     ]);
-    await session.respond(event.requestId, decision);
     this.#say(
-      `${at.nodeId}: ${decision.kind === "allow_once" ? "approved" : "denied"} ${event.action.kind} needing a human (${verdict.ruleId}).`,
+      `${at.nodeId}: ${decision.kind === "allow_once" ? "approved" : "denied"} ${action.kind} needing a human (${ruleId}).`,
     );
-    return decision.kind === "allow_once" ? "approved" : "denied";
+    return decision.kind === "allow_once";
+  }
+
+  /** Policy for upstream MCP calls made through the gateway. */
+  async #authorizeMcp(
+    runId: RunId,
+    at: { nodeId: NodeId; attempt: number },
+    task: TaskNode,
+    packet: ContextPacket,
+    call: { readonly server: string; readonly tool: string; readonly access: "read" | "write" },
+  ): Promise<GatewayDecision> {
+    const action: ProposedAction = {
+      kind: "mcp_call",
+      server: call.server,
+      tool: call.tool,
+      access: call.access,
+    };
+    const verdict = evaluatePolicy(this.#o.policy, action, {
+      writeScope: task.writeScope,
+      tools: packet.tools,
+      checkCommands: task.checks.flatMap((c) => (c.kind === "command" ? [c.argv] : [])),
+    });
+    if (verdict.effect === "allow") return "auto_allowed";
+    if (verdict.effect === "deny") return "denied";
+    return this.#askHuman(runId, at, action, verdict.ruleId) ? "approved" : "denied";
+  }
+
+  /** Every gateway call becomes a tool.call event; arguments and result go to the blob store. */
+  #recordMcp(runId: RunId, at: { nodeId: NodeId; attempt: number }, call: GatewayCall): void {
+    const blob = this.#o.store.blobs.put(
+      canonicalize({ args: call.args ?? null, result: call.result ?? null }),
+      "application/vnd.orzeus.tool-call+json",
+    );
+    this.#append(runId, [
+      this.#draft(
+        runId,
+        "tool.call",
+        {
+          server: call.server,
+          tool: call.tool,
+          argsHash: contentHash(call.args ?? null, sha256Text),
+          decision: call.decision,
+          isError: call.isError,
+          resultHash: contentHash(call.result ?? null, sha256Text),
+          durationMs: call.durationMs,
+        },
+        { ...at, blobs: [blob] },
+      ),
+    ]);
+  }
+
+  /** The run's gateway, started on first use; null if it cannot start (workers then go without). */
+  #gatewayFor(runId: RunId): Promise<McpGateway | null> {
+    const open = this.#o.openGateway;
+    if (open === undefined) return Promise.resolve(null);
+    let gateway = this.#gateways.get(runId);
+    if (gateway === undefined) {
+      gateway = open(this.#state(runId)).catch((error: unknown) => {
+        this.#o.logger.log("warn", "gateway unavailable", {
+          runId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.#say(`MCP gateway unavailable; workers run without it (${String(error)}).`);
+        return null;
+      });
+      this.#gateways.set(runId, gateway);
+    }
+    return gateway;
   }
 
   #afterFailure(
