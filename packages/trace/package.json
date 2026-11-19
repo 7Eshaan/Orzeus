@@ -1,0 +1,21 @@
+{
+  "name": "@orzeus/trace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "RFC 8785 canonical JSON, SHA-256 hash chain, chain verifier, JSONL and OTLP exporters.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/core": "workspace:*"
+  }
+}

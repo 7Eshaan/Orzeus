@@ -1,0 +1,21 @@
+{
+  "name": "@orzeus/mcp-gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Per-run loopback MCP server (2026-07-28, stateless). Exposes each node's allowlisted tools and packet resources, proxies upstream servers, and runs every call through policy and the trace.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/core": "workspace:*"
+  }
+}

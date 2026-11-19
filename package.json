@@ -1,0 +1,30 @@
+{
+  "name": "orzeus",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=26.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.tests.json",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:deps": "node tooling/scripts/check-deps.ts",
+    "check:rust": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+    "check": "pnpm lint && pnpm check:deps && pnpm typecheck && pnpm test && pnpm check:rust",
+    "dev": "pnpm build && pnpm --filter @orzeus/desktop tauri dev",
+    "clean": "tsc -b --clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.8",
+    "@types/node": "26.6.6",
+    "fast-check": "4.10.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.1"
+  }
+}

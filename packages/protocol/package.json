@@ -1,0 +1,20 @@
+{
+  "name": "@orzeus/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed JSON-RPC 2.0 contract between the orzeusd engine and the desktop UI, framed as newline-delimited JSON over the sidecar's stdio.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}

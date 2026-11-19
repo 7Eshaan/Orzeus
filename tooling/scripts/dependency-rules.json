@@ -1,0 +1,28 @@
+{
+  "$comment": "Which workspace packages each package may depend on. See docs/architecture/01-monorepo-layout.md.",
+  "pure": ["@orzeus/schema", "@orzeus/core", "@orzeus/protocol", "@orzeus/trace"],
+  "allowed": {
+    "@orzeus/schema": [],
+    "@orzeus/core": ["@orzeus/schema"],
+    "@orzeus/protocol": ["@orzeus/schema"],
+    "@orzeus/trace": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/store": ["@orzeus/schema", "@orzeus/core", "@orzeus/trace"],
+    "@orzeus/git": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/checks": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/mcp-gateway": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/providers": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/memory-server": ["@orzeus/schema"],
+    "@orzeus/engine": [
+      "@orzeus/schema",
+      "@orzeus/core",
+      "@orzeus/protocol",
+      "@orzeus/trace",
+      "@orzeus/store",
+      "@orzeus/git",
+      "@orzeus/checks",
+      "@orzeus/mcp-gateway",
+      "@orzeus/providers"
+    ],
+    "@orzeus/desktop": ["@orzeus/protocol", "@orzeus/schema"]
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@orzeus/git",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Git worktree manager over the git CLI: create, reset, diff, commit, cleanup.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/core": "workspace:*"
+  }
+}

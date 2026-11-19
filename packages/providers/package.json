@@ -1,0 +1,21 @@
+{
+  "name": "@orzeus/providers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The ProviderAdapter contract, one folder per adapter, and the shared conformance suite every adapter must pass.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/core": "workspace:*"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@orzeus/store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SQLite persistence: migrations, append-only event store, projections, content-addressed blobs, checkpoints. Implements core's EventStore and BlobStore ports.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/core": "workspace:*",
+    "@orzeus/trace": "workspace:*"
+  }
+}

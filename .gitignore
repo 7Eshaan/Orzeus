@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-types/
+*.tsbuildinfo
+target/
+apps/desktop/src-tauri/gen/schemas/
+
+# Local data and logs
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json

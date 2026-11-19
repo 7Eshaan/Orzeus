@@ -1,0 +1,17 @@
+{
+  "name": "@orzeus/memory-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "orzeus-memory: a standalone MCP server (stdio) for persistent repo decisions, constraints and conventions, backed by its own memory.db.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "@orzeus/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure domain logic: DAG validation, run and node reducers, scheduler decisions, router, policy evaluation, budget math, retry backoff. Defines the ports (interfaces) for everything with side effects.",
+  "exports": {
+    ".": {
+      "@orzeus/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@orzeus/schema": "workspace:*"
+  }
+}

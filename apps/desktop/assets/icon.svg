@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">Orzeus</title>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#f8f7f4"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#e8e6e1" stroke-width="8"/>
+  <g stroke="#2f6f62" stroke-width="36" stroke-linecap="round" fill="none">
+    <path d="M512 330 L340 640"/>
+    <path d="M512 330 L684 640"/>
+    <path d="M340 690 L684 690"/>
+  </g>
+  <circle cx="512" cy="300" r="92" fill="#2f6f62"/>
+  <circle cx="320" cy="690" r="72" fill="#3c9a76"/>
+  <circle cx="704" cy="690" r="72" fill="#3c9a76"/>
+</svg>

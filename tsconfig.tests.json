@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tooling/tsconfig/base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "customConditions": ["@orzeus/source"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "services/*/src/**/*.test.ts",
+    "apps/*/src/**/*.test.ts",
+    "tooling/scripts/**/*.ts",
+    "vitest.config.ts"
+  ]
+}
