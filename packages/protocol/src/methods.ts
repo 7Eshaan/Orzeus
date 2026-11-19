@@ -1,8 +1,12 @@
 import { CheckpointId, RunId } from "@orzeus/schema";
 import { z } from "zod";
 import {
+  McpServerId,
+  McpServerInput,
+  McpServerView,
   MemoryView,
   PendingGate,
+  PlanEdit,
   QuotaReport,
   RunDetail,
   RunSummary,
@@ -69,6 +73,16 @@ export const methods = {
     }),
     result: z.object({ runId: RunId }),
   },
+  /** The proposed plan in its editable form; only while the run awaits plan approval. */
+  "runs.plan": { params: byRun, result: PlanEdit },
+  /**
+   * Replaces the proposed plan with an edited one (a new revision, recorded as a human edit).
+   * Rejected with every problem listed if the edit is invalid or `revision` is stale.
+   */
+  "runs.revisePlan": {
+    params: z.strictObject({ runId: RunId, plan: PlanEdit }),
+    result: z.object({ revision: z.int() }),
+  },
   "runs.approvePlan": { params: byRun, result: ok },
   "runs.resume": { params: byRun, result: ok },
   "runs.rollback": {
@@ -101,6 +115,12 @@ export const methods = {
 
   "quota.read": { params: empty, result: QuotaReport },
   "settings.read": { params: empty, result: SettingsView },
+  "mcp.list": { params: empty, result: z.array(McpServerView) },
+  /** Creates or updates a server; changes apply to runs started afterwards. */
+  "mcp.save": { params: z.strictObject({ server: McpServerInput }), result: McpServerView },
+  "mcp.remove": { params: z.strictObject({ id: McpServerId }), result: ok },
+  /** Connects, lists the server's tools and records the result. Starts stdio servers. */
+  "mcp.test": { params: z.strictObject({ id: McpServerId }), result: McpServerView },
   "memory.list": {
     params: z.strictObject({ repo: z.string().min(1) }),
     result: z.array(MemoryView),

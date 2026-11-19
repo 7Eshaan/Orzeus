@@ -212,10 +212,54 @@ export class RunOrchestrator {
     ]);
   }
 
-  approvePlan(runId: RunId, edited = false): void {
+  /** The plan waiting for approval, with each node's latest packet. */
+  proposedPlan(runId: RunId): PlannerOutput {
+    const dag = this.#state(runId).proposedDag;
+    if (dag === null) throw new Error("no plan is waiting for approval");
+    return {
+      dag,
+      packets: dag.nodes.map((n) => {
+        const { contentHash: _hash, ...body } = this.#plannedPacket(runId, n.id);
+        return body;
+      }),
+    };
+  }
+
+  /**
+   * Proposes a human-edited revision of the waiting plan. Only packets that changed are issued
+   * again; the reducer checks that the revision moves forward.
+   */
+  revisePlan(runId: RunId, plan: PlannerOutput): void {
+    const issued = plan.packets.flatMap((body) => {
+      const sealed = this.#sealPacket(body);
+      let before: string | null = null;
+      try {
+        before = this.#plannedPacket(runId, body.nodeId).contentHash;
+      } catch {
+        before = null; // a node added in this edit
+      }
+      return before === sealed.contentHash ? [] : [this.#issuePacket(runId, sealed)];
+    });
+    this.#append(runId, [
+      ...issued,
+      this.#draft(
+        runId,
+        "plan.proposed",
+        { revision: plan.dag.revision, dag: plan.dag },
+        { actor: { kind: "human" } },
+      ),
+    ]);
+    this.#say(`Run ${runId}: plan revision ${plan.dag.revision} (edited) is waiting for approval.`);
+  }
+
+  /** `edited` defaults to whether a person revised the plan since it was proposed. */
+  approvePlan(runId: RunId, edited?: boolean): void {
     const state = this.#state(runId);
     const revision = state.proposedDag?.revision;
     if (revision === undefined) throw new Error("no plan is waiting for approval");
+    edited ??=
+      this.#o.store.events(runId).findLast((e) => e.type === "plan.proposed")?.actor.kind ===
+      "human";
     this.#append(runId, [
       this.#draft(runId, "plan.approved", { revision, edited }, { actor: { kind: "human" } }),
       this.#checkpointDraft(runId, this.#state(runId), "plan approved"),

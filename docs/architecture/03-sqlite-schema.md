@@ -302,6 +302,10 @@ CREATE TABLE settings (
 ) STRICT, WITHOUT ROWID;
 ```
 
+`mcp_servers` in practice (Phase 5): rows are global for now (`project_id` NULL).
+`config_json` holds `{config, defaultGrant}`, `secret_ref` names the Keychain entry
+`mcp.<id>`, and `discovered_json` is the last connection test (its tools, or the error).
+
 ## Migration 0002 (run locks)
 
 ```sql

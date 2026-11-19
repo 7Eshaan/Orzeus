@@ -3,6 +3,7 @@ import { type FormEvent, useState } from "react";
 import { useEngineClient } from "../../app/context.tsx";
 import { useLive } from "../../app/live.ts";
 import { Button, Field, inputClass, Panel, Pill } from "../../ui/components.tsx";
+import { McpServers } from "./McpServers.tsx";
 import styles from "./settings.module.css";
 
 const KEYS = [
@@ -62,6 +63,7 @@ export function Settings() {
         )}
       </Panel>
       <ApiKeys received={s?.secrets ?? null} />
+      <McpServers />
       <Memory />
     </div>
   );

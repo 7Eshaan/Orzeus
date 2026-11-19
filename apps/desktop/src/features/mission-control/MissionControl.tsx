@@ -104,8 +104,10 @@ export function MissionControl({ runId, onRun, onOpenApprovals }: Props) {
 
       {detail.awaitingPlanApproval && detail.dag !== null && (
         <PlanReview
+          runId={runId}
           dag={detail.dag}
           busy={busy}
+          onRevised={run.refresh}
           onApprove={() =>
             act(() => client?.request("runs.approvePlan", { runId }) ?? Promise.resolve())
           }

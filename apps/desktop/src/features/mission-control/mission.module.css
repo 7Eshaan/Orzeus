@@ -192,3 +192,84 @@
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
+.narrow {
+  max-width: 96px;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.problems {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-bad-soft);
+  color: var(--color-bad);
+  font-size: var(--text-sm);
+}
+.problems ul {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+.editList {
+  list-style: none;
+  margin: var(--space-4) 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.editNode > fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin: 0;
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.editRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.editRow2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.choices {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  align-items: center;
+  font-size: var(--text-sm);
+}
+.choices legend {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.toolServer {
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.editFoot {
+  display: flex;
+  justify-content: flex-end;
+}
+.objective {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+}

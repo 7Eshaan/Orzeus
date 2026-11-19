@@ -1,13 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { RunState } from "@orzeus/core";
 import { MEMORY_KINDS } from "@orzeus/memory-server";
-import type {
-  MethodResult,
-  NotificationName,
-  PendingGate,
-  RpcHandlers,
-  RunDetail,
-  RunSummary,
+import {
+  type MethodResult,
+  type NotificationName,
+  type PendingGate,
+  PlanEdit,
+  type RpcHandlers,
+  type RunDetail,
+  type RunSummary,
 } from "@orzeus/protocol";
 import type { AccountId, GitOid, RunId } from "@orzeus/schema";
 import { exportJsonl, exportOtlp } from "@orzeus/trace";
@@ -16,7 +17,9 @@ import { createHandlers, type EngineInfo } from "./handlers.js";
 import { ulid } from "./ids.js";
 import type { Logger } from "./logger.js";
 import type { GateAnswer, GateRequest } from "./orchestrator.js";
-import { expandHandPlan } from "./plan-file.js";
+import { checkCommandsExist } from "./plan-checks.js";
+import { applyPlanEdit, toPlanEdit, withGrants } from "./plan-edit.js";
+import { expandHandPlan, PlanFileError } from "./plan-file.js";
 import { planRun, prepareRepo } from "./plan-run.js";
 
 type Notify = (method: string, params: unknown) => void;
@@ -254,9 +257,33 @@ export class EngineService {
         const runId = ulid() as RunId;
         engine.orchestrator.createRun(
           prepared.projectId,
-          expandHandPlan(plan, runId, prepared.repo),
+          withGrants(expandHandPlan(plan, runId, prepared.repo), engine.mcpServers.defaultGrants()),
         );
         return { runId };
+      },
+      "runs.plan": ({ runId }) => toPlanEdit(engine.orchestrator.proposedPlan(runId as RunId)),
+      "runs.revisePlan": ({ runId, plan }) => {
+        if (this.#active.has(runId as RunId)) throw new Error("the run is still being planned");
+        const revised = applyPlanEdit(
+          engine.orchestrator.proposedPlan(runId as RunId),
+          PlanEdit.parse(plan),
+        );
+        const problems = [
+          ...checkCommandsExist(revised, revised.dag.repo.root),
+          ...revised.dag.nodes.flatMap((n) =>
+            n.candidates.flatMap((c) =>
+              engine.workers.get(c.adapter) === undefined
+                ? [`${n.id}: worker adapter ${c.adapter} is not enabled`]
+                : [],
+            ),
+          ),
+        ];
+        if (problems.length > 0)
+          throw new PlanFileError(
+            `Plan has problems:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+          );
+        engine.orchestrator.revisePlan(runId as RunId, revised);
+        return { revision: revised.dag.revision };
       },
       "runs.approvePlan": ({ runId }) => {
         engine.orchestrator.approvePlan(runId as RunId);
@@ -378,6 +405,13 @@ export class EngineService {
           codexEnabled: this.#o.enableCodex ?? false,
         };
       },
+      "mcp.list": () => engine.mcpServers.list(),
+      "mcp.save": ({ server }) => engine.mcpServers.save(server),
+      "mcp.remove": ({ id }) => {
+        engine.mcpServers.remove(id);
+        return ok;
+      },
+      "mcp.test": ({ id }) => engine.mcpServers.test(id),
       "memory.list": async ({ repo }) => {
         const root = await engine.git.topLevel(repo);
         return engine.memory

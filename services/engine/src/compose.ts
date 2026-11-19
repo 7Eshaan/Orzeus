@@ -17,8 +17,9 @@ import {
   type ProviderAdapter,
 } from "@orzeus/providers";
 import { type AccountId, DEFAULT_POLICY, type ModelRef, type PolicyDocument } from "@orzeus/schema";
-import { type Db, openStore, RunLocks, SqliteRunStore } from "@orzeus/store";
+import { type Db, McpServers, openStore, RunLocks, SqliteRunStore } from "@orzeus/store";
 import type { Logger } from "./logger.js";
+import { McpServerRegistry } from "./mcp-servers.js";
 import {
   type FrontierModel,
   type GateAnswer,
@@ -67,6 +68,8 @@ export interface Engine {
   readonly db: Db;
   readonly store: SqliteRunStore;
   readonly memory: MemoryStore;
+  /** Upstream MCP servers the user configured; enabled ones join every run's gateway. */
+  readonly mcpServers: McpServerRegistry;
   readonly git: Git;
   readonly orchestrator: RunOrchestrator;
   /** Adapters that can plan (structured output), keyed by adapter id. */
@@ -180,8 +183,16 @@ function memoryServerMain(): string {
   return join(dir, "dist", "main.js");
 }
 
-/** Starts the run's gateway with the memory server for the run's repository as an upstream. */
-async function openGateway(dataDir: string, state: RunState): Promise<McpGateway> {
+/**
+ * Starts the run's gateway: the memory server for the run's repository, plus every enabled
+ * server the user configured (those that fail to connect are skipped with a warning).
+ */
+async function openGateway(
+  dataDir: string,
+  state: RunState,
+  servers: McpServerRegistry,
+  warn: (message: string) => void,
+): Promise<McpGateway> {
   const client = new Client({ name: "orzeus-gateway", version: ENGINE_VERSION });
   await client.connect(
     new StdioClientTransport({
@@ -190,7 +201,7 @@ async function openGateway(dataDir: string, state: RunState): Promise<McpGateway
     }),
   );
   return McpGateway.start({
-    upstreams: [await describeUpstream("memory", client)],
+    upstreams: [await describeUpstream("memory", client), ...(await servers.upstreams(warn))],
     ownsUpstreams: true,
   });
 }
@@ -224,6 +235,7 @@ export function createEngine(config: EngineConfig): Engine {
   const db = openStore(join(config.dataDir, "orzeus.db"));
   const store = new SqliteRunStore(db);
   const memory = new MemoryStore(join(config.dataDir, "memory.db"));
+  const mcpServers = new McpServerRegistry(new McpServers(db), config.env ?? process.env);
   const git = new Git();
   const workers = config.adapters ?? defaultAdapters(config);
   const planners = plannerAdapters(config);
@@ -260,13 +272,20 @@ export function createEngine(config: EngineConfig): Engine {
     ...(config.progress === undefined ? {} : { progress: config.progress }),
     ...(config.gateway === false
       ? {}
-      : { openGateway: (state: RunState) => openGateway(config.dataDir, state) }),
+      : {
+          openGateway: (state: RunState) =>
+            openGateway(config.dataDir, state, mcpServers, (message) => {
+              config.logger.log("warn", message, { runId: state.runId });
+              config.progress?.(`Run ${state.runId}: ${message}`);
+            }),
+        }),
   });
 
   return {
     db,
     store,
     memory,
+    mcpServers,
     git,
     orchestrator,
     planners,

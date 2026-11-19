@@ -11,6 +11,7 @@ import { createEngine, type Engine, headlessGate } from "./compose.js";
 import { ulid } from "./ids.js";
 import { createJsonLogger } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
+import { withGrants } from "./plan-edit.js";
 import { expandHandPlan, PlanFileError } from "./plan-file.js";
 import { planRun, prepareRepo } from "./plan-run.js";
 import { ENGINE_VERSION } from "./version.js";
@@ -176,7 +177,10 @@ async function main(argv: readonly string[]): Promise<number> {
         let plan: PlannerOutput;
         if (target !== undefined) {
           runId = ulid() as RunId;
-          plan = expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, prepared.repo);
+          plan = withGrants(
+            expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, prepared.repo),
+            engine.mcpServers.defaultGrants(),
+          );
           engine.orchestrator.createRun(prepared.projectId, plan);
         } else {
           if (values.goal === undefined) throw new UsageError("give a plan file or --goal");

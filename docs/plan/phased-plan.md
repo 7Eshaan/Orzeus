@@ -207,8 +207,22 @@ Exit: full run from the UI; keyboard-navigable; accessibility check (contrast, f
 - The dev bridge (`pnpm dev:web`) runs the UI in an ordinary browser for design and testing.
   It listens on 127.0.0.1 only and accepts requests only from the Vite origin.
 - JSONL and OTLP (GenAI semantic conventions) export are both in the Trace Inspector.
-- Not done: MCP server management and OAuth in Settings, and editing a
-  plan's nodes in the UI (a hand plan can be pasted instead).
+- Plan editing (added after the exit check): "Edit plan" in plan review changes any node's task,
+  done-when criteria, constraints, checks, write scope, dependencies, worker and MCP tools, and
+  adds or removes nodes. Saving records a new `plan.proposed` revision with a human actor, and
+  `plan.approved` records `edited: true`. Budgets, retry policy and context pointers are kept;
+  new nodes get the hand-plan defaults. Edits are validated (graph, schema, check commands
+  that exist in the repo, enabled worker adapters) and every problem is listed at once.
+- MCP servers (added after the exit check): Settings adds, edits, tests, turns off and removes
+  upstream servers (stdio command or Streamable HTTP URL), stored in `mcp_servers`. A test
+  connects and lists the tools. Enabled servers join every run's gateway (one that fails to
+  connect is skipped with a warning). Each server has a default grant for new plans (none,
+  read-only tools, or all tools; anything that writes still asks you through policy). One secret
+  per server lives in the Keychain as `mcp.<id>` and reaches the engine as
+  `ORZEUS_MCP_SECRET_<ID>`: stdio servers get it under a variable you name, HTTP servers as a
+  bearer token.
+- Not done: OAuth sign-in for remote MCP servers (static bearer tokens work), and telling the
+  planner which MCP tools exist (grants come from server defaults or the plan editor).
 - Found while hardening the test suite: git child processes could crash the engine with EPIPE
   when git exited before reading stdin, and lock heartbeats could fire after the database
   closed. Both are fixed.

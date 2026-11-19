@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createFixtureRepo } from "@orzeus/git/testing";
-import type { RpcHandlers } from "@orzeus/protocol";
+import type { PlanEdit, RpcHandlers } from "@orzeus/protocol";
 import {
   type AccountContext,
   AdapterRegistry,
@@ -141,6 +142,9 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/** Handlers may throw synchronously; over the wire both become RPC errors. */
+const call = <T>(fn: () => T | Promise<T>): Promise<T> => Promise.resolve().then(fn);
+
 async function until<T>(
   read: () => Promise<T> | T,
   done: (value: T) => boolean,
@@ -208,5 +212,157 @@ describe("EngineService", () => {
       expect.arrayContaining(["fake-planner", "openai-compatible"]),
     );
     expect(settings.secrets).toEqual({ anthropic: false, gemini: false, openai: false });
+  });
+
+  it("lets a person edit the proposed plan, and runs the edited plan", async () => {
+    const { runId } = await h["runs.start"]({ goal: "Write files", repo });
+    await until(
+      () => h["runs.get"]({ runId }),
+      (d) => d.awaitingPlanApproval && !d.active,
+    );
+    const plan = await h["runs.plan"]({ runId });
+    expect(plan.revision).toBe(1);
+    const one = plan.nodes.find((n) => n.id === "one");
+    if (one === undefined) throw new Error("no node one");
+
+    const broken: PlanEdit = {
+      ...plan,
+      nodes: [{ ...one, dependsOn: ["missing" as never] }],
+    };
+    await expect(call(() => h["runs.revisePlan"]({ runId, plan: broken }))).rejects.toThrow(
+      /missing/,
+    );
+
+    const edited: PlanEdit = {
+      ...plan,
+      maxConcurrency: 1,
+      nodes: [
+        { ...one, title: "Write the first file", constraints: ["Keep it short"] },
+        {
+          ...one,
+          id: "three" as never,
+          title: "Write three",
+          dependsOn: ["one" as never],
+          writeScope: ["three.txt"],
+          checks: [
+            {
+              kind: "command",
+              id: "exists",
+              label: "exists",
+              argv: ["node", "-e", "require('fs').accessSync('three.txt')"],
+              cwd: ".",
+              timeoutMs: 60_000,
+              expectExitCode: 0,
+            },
+          ],
+          objective: "Create three.txt",
+          acceptance: ["three.txt exists"],
+          constraints: [],
+        },
+      ],
+    };
+    expect(await h["runs.revisePlan"]({ runId, plan: edited })).toEqual({ revision: 2 });
+    await expect(call(() => h["runs.revisePlan"]({ runId, plan: edited }))).rejects.toThrow(
+      /changed/,
+    );
+
+    const revised = await h["runs.plan"]({ runId });
+    expect(revised.nodes.map((n) => [n.id, n.title])).toEqual([
+      ["one", "Write the first file"],
+      ["three", "Write three"],
+    ]);
+    expect(revised.nodes[0]?.constraints).toEqual(["Keep it short"]);
+    expect(revised.maxConcurrency).toBe(1);
+
+    await h["runs.approvePlan"]({ runId });
+    const gates = await until(
+      () => h["approvals.list"]({}),
+      (g) => g.some((x) => x.runId === runId),
+    );
+    const gate = gates.find((x) => x.runId === runId);
+    await h["approvals.answer"]({ id: gate?.id ?? "", decision: "approve" });
+    const done = await until(
+      () => h["runs.get"]({ runId }),
+      (d) => d.status === "completed" && !d.active,
+    );
+    expect(done.nodeViews.map((n) => n.id)).toEqual(["one", "three"]);
+    expect(execFileSync("git", ["show", "main:three.txt"], { cwd: repo, encoding: "utf8" })).toBe(
+      "ok\n",
+    );
+    const events = (await h["runs.events"]({ runId })).map((e) => parseTraceEvent(e));
+    const approved = events.find((r) => r.ok && r.value.type === "plan.approved");
+    expect(approved?.ok && approved.value.payload).toEqual({ revision: 2, edited: true });
+    const proposals = events.filter((r) => r.ok && r.value.type === "plan.proposed");
+    expect(proposals.map((r) => r.ok && r.value.actor.kind)).toEqual(["engine", "human"]);
+  });
+
+  it("manages MCP servers, tests them, and grants their tools to new plans", async () => {
+    let memoryDir = dirname(createRequire(import.meta.url).resolve("@orzeus/memory-server"));
+    while (!existsSync(join(memoryDir, "package.json"))) memoryDir = dirname(memoryDir);
+    const saved = await h["mcp.save"]({
+      server: {
+        id: "notes",
+        name: "Notes",
+        enabled: true,
+        defaultGrant: "read",
+        config: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [join(memoryDir, "dist", "main.js"), "--db", join(dir, "notes.db"), "--repo", repo],
+          env: {},
+          secretEnv: null,
+        },
+      },
+    });
+    expect(saved).toMatchObject({
+      id: "notes",
+      secretSet: false,
+      secretVar: "ORZEUS_MCP_SECRET_NOTES",
+      discovered: null,
+    });
+    await expect(
+      call(() => h["mcp.save"]({ server: { ...saved, id: "memory", name: "Other" } })),
+    ).rejects.toThrow(/reserved/);
+    await expect(
+      call(() => h["mcp.save"]({ server: { ...saved, id: "notes-2" } })),
+    ).rejects.toThrow(/already named/);
+
+    const tested = await h["mcp.test"]({ id: "notes" });
+    expect(tested.discovered?.ok).toBe(true);
+    const tools = tested.discovered?.tools ?? [];
+    expect(tools.map((t) => t.name)).toContain("memory_search");
+
+    const broken = await h["mcp.save"]({
+      server: {
+        ...saved,
+        id: "broken",
+        name: "Broken",
+        enabled: false,
+        config: { ...saved.config, command: join(dir, "no-such-server"), args: [] },
+      } as never,
+    });
+    const failed = await h["mcp.test"]({ id: broken.id });
+    expect(failed.discovered).toMatchObject({ ok: false, tools: [] });
+    expect(failed.discovered?.error).toBeTruthy();
+    expect((await h["mcp.list"]({})).map((s) => s.id)).toEqual(["broken", "notes"]);
+
+    const { runId } = await h["runs.start"]({ goal: "Use the notes", repo });
+    await until(
+      () => h["runs.get"]({ runId }),
+      (d) => d.awaitingPlanApproval && !d.active,
+    );
+    const plan = await h["runs.plan"]({ runId });
+    const grants = plan.nodes[0]?.mcp.filter((g) => g.server === "notes") ?? [];
+    expect(grants.map((g) => g.tool).sort()).toEqual(
+      tools
+        .filter((t) => t.readOnly)
+        .map((t) => t.name)
+        .sort(),
+    );
+    expect(grants.every((g) => g.access === "read")).toBe(true);
+
+    await h["mcp.remove"]({ id: "broken" });
+    await h["mcp.remove"]({ id: "notes" });
+    expect(await h["mcp.list"]({})).toEqual([]);
   });
 });

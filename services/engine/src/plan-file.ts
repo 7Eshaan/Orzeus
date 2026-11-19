@@ -76,21 +76,21 @@ export const HandPlan = z.object({
 });
 export type HandPlan = z.infer<typeof HandPlan>;
 
-const NODE_BUDGET: NodeBudget = {
+export const NODE_BUDGET: NodeBudget = {
   maxInputTokens: 400_000,
   maxOutputTokens: 60_000,
   maxCostMicroUsd: 5_000_000,
   maxWallMs: 900_000,
   maxTurns: 30,
 };
-const RETRY: RetryPolicy = {
+export const RETRY: RetryPolicy = {
   maxAttempts: 3,
   baseDelayMs: 2_000,
   maxDelayMs: 60_000,
   jitter: "full",
 };
 /** No frontier steering until Phase 3, so escalations go to a human by default. */
-const ESCALATION: EscalationPolicy = {
+export const ESCALATION: EscalationPolicy = {
   workerRetriesOnCheckFailure: 1,
   onAmbiguity: "ask_human",
   maxSteers: 0,

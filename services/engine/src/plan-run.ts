@@ -5,6 +5,7 @@ import type { PlannerOutput, ProjectId, RepoRef, RunId } from "@orzeus/schema";
 import type { Engine } from "./compose.js";
 import { ulid } from "./ids.js";
 import { checkCommandsExist } from "./plan-checks.js";
+import { withGrants } from "./plan-edit.js";
 import { PlanningError, planGoal } from "./planner.js";
 
 export interface PreparedRepo {
@@ -72,9 +73,10 @@ export async function planRun(
       signal: AbortSignal.timeout(600_000),
     });
     for (const warning of result.warnings) say(`  note: ${warning}`);
-    engine.orchestrator.proposePlan(result.plan, result.calls);
+    const plan = withGrants(result.plan, engine.mcpServers.defaultGrants());
+    engine.orchestrator.proposePlan(plan, result.calls);
     say(`Plan: ${result.summary}`);
-    return { runId, plan: result.plan, summary: result.summary };
+    return { runId, plan, summary: result.summary };
   } catch (error) {
     if (error instanceof PlanningError) {
       engine.orchestrator.failPlanning(runId, error.calls, error.message);

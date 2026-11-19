@@ -28,7 +28,9 @@ the Tauri window. The Rust shell launches `node services/engine/dist/main.js`; o
 `ORZEUS_NODE` and `ORZEUS_ENGINE_ENTRY` if needed.
 
 API keys entered in Settings go to the macOS Keychain; the shell passes them to the engine as
-environment variables and restarts it.
+environment variables and restarts it. MCP server secrets work the same way (`mcp.<id>` in the
+Keychain, `ORZEUS_MCP_SECRET_<ID>` for the engine). In the browser (dev bridge) secrets cannot be
+set from the UI; export the variable before starting the bridge instead.
 
 ## Run in a browser
 
