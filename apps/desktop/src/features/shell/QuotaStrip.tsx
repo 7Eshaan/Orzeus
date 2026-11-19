@@ -10,7 +10,7 @@ export function QuotaStrip() {
   const quota = useLive(
     client === null ? null : () => client.request("quota.read", {}),
     [],
-    ["run.updated"],
+    ["run.updated", "quota.changed"],
     60_000,
   );
   const [now, setNow] = useState(Date.now());
@@ -20,7 +20,9 @@ export function QuotaStrip() {
   }, []);
   const q = quota.data;
   if (q === null) return <div className={styles.quota} aria-busy="true" />;
-  const windows = q.accounts.flatMap((a) => a.windows.map((w) => ({ ...w, label: a.label })));
+  const windows = q.accounts.flatMap((a) =>
+    a.windows.map((w) => ({ ...w, label: a.label, cap: a.softCaps[w.window] ?? null })),
+  );
 
   return (
     <section className={styles.quota} aria-label="Usage and quota">
@@ -28,7 +30,7 @@ export function QuotaStrip() {
         <div
           key={`${w.accountId}-${w.window}`}
           className={styles.meter}
-          title={`${w.label} ${w.window} window (${w.source.replaceAll("_", " ")})`}
+          title={`${w.label} ${w.window} window (${w.source.replaceAll("_", " ")})${w.cap === null ? "" : `; new work pauses at ${w.cap}%`}`}
         >
           <span className={styles.meterLabel}>
             {w.label} · {w.window}
@@ -39,9 +41,11 @@ export function QuotaStrip() {
               data-status={w.status}
               style={{ width: `${w.usedPercent ?? 0}%` }}
             />
+            {w.cap !== null && <span className={styles.cap} style={{ left: `${w.cap}%` }} />}
           </span>
           <span className={styles.meterValue}>
             {w.usedPercent ?? "?"}%<span className="visually-hidden"> used</span>
+            {w.cap !== null && <span className="visually-hidden">, limit {w.cap}%</span>}
             {w.resetsAt !== null ? ` · resets in ${countdown(w.resetsAt, now)}` : ""}
           </span>
         </div>

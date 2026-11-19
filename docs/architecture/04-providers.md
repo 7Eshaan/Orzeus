@@ -63,6 +63,17 @@ routed back to Orzeus's policy engine, which auto-allows, denies, or queues it f
 - The Anthropic and Gemini adapters are tested against fixtures written from their docs, not
   recordings; re-record once keys are available.
 
+### Added in Phase 6
+
+- `openai-api`, `claude-agent-sdk`, `codex-exec`, `cursor-cli` and `acp` (see the Phase 6 notes
+  in docs/plan/phased-plan.md for the details of each). Shared pieces: `quota.ts` (OpenAI
+  `x-ratelimit-*` headers, Claude `rate_limit_event`, token estimates), `pricing.ts` (OpenAI
+  prices from the official page), `jsonl-process.ts` (CLI event streams) and `paths.ts`
+  (keeping agent paths inside the worktree).
+- `codex-exec` shares the `codex-cli-login` account with `codex-app-server`, so the quota read by
+  the app-server applies to both. The Cursor account is `cursor-cli-login`, or `cursor-api-key`
+  when `CURSOR_API_KEY` is set.
+
 ## How work is routed
 
 For a node with tier `T` and ordered `candidates`, the router picks the first candidate whose:

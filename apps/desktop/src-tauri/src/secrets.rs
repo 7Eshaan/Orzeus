@@ -8,16 +8,17 @@
 //! services/engine/src/mcp-servers.ts). The keychain cannot list entries, so the ids of stored
 //! MCP secrets are kept in one more entry, [`MCP_INDEX`].
 
-use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Keychain service name (matches the app identifier).
 const SERVICE: &str = "dev.orzeus.desktop";
 
 /// Keys Orzeus knows about: (name used by the UI, environment variable for the engine).
-pub const KNOWN: [(&str, &str); 3] = [
+pub const KNOWN: [(&str, &str); 4] = [
     ("anthropic", "ANTHROPIC_API_KEY"),
     ("gemini", "GEMINI_API_KEY"),
     ("openai", "OPENAI_API_KEY"),
+    ("cursor", "CURSOR_API_KEY"),
 ];
 
 /// Keychain entry listing the server ids that have an MCP secret, one per line.
@@ -90,20 +91,13 @@ pub fn engine_env() -> Vec<(String, String)> {
     providers.chain(mcp).collect()
 }
 
-#[derive(Serialize)]
-pub struct SecretStatus {
-    anthropic: bool,
-    gemini: bool,
-    openai: bool,
-}
-
+/// Which known keys are stored, by name (`{"anthropic": true, ...}`); never the keys.
 #[tauri::command]
-pub fn secret_status() -> SecretStatus {
-    SecretStatus {
-        anthropic: read("anthropic").is_some(),
-        gemini: read("gemini").is_some(),
-        openai: read("openai").is_some(),
-    }
+pub fn secret_status() -> BTreeMap<&'static str, bool> {
+    KNOWN
+        .iter()
+        .map(|(name, _)| (*name, read(name).is_some()))
+        .collect()
 }
 
 #[tauri::command]

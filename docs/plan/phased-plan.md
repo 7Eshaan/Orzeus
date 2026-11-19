@@ -229,10 +229,54 @@ Exit: full run from the UI; keyboard-navigable; accessibility check (contrast, f
 
 ## Phase 6: Remaining adapters and telemetry polish (about 1 week)
 
+Status: **done** (2026-11-19). All five adapters pass the shared conformance suite (compliant
+manifest, no foreign credential paths, probe without tokens, a full session with usage and file
+changes, a denial, cancellation within two seconds with no process left behind). Soft caps were
+checked end to end: an account over its cap holds the node, records `budget.tripped`, and the
+node starts once the window resets. No Codex quota and no paid API calls were used.
+
 `claude-agent-sdk` (API key), `codex-exec`, `openai-api`, `cursor-cli`, `acp` (v1), quota
 parsers for each source, soft caps UI.
 
 **Commit point 8:** `feat(providers): cursor, ACP, Agent SDK and OpenAI adapters`.
+
+### Phase 6 notes
+
+- Verified 2026-11-19: `@anthropic-ai/claude-agent-sdk` 0.3.327 (0.3.328 is under a day old, so pnpm's release-age policy holds it back), `@agentclientprotocol/sdk`
+  2.8.0 (ACP v1, protocol version 1), codex-cli 0.169/0.170 `exec --json` events
+  (codex-rs/exec/src/exec_events.rs), Cursor's stream-json format, and OpenAI's published prices.
+- None of the new adapters could be recorded live here (no Anthropic, OpenAI or Cursor keys, no
+  cursor-agent install, and recording Codex spends quota), so they are tested against fakes
+  written from the documented formats: a fake `query()` for the Agent SDK, fake CLIs for
+  codex exec and cursor-agent, a small ACP agent built with the official SDK, and the local
+  Chat Completions recording with OpenAI's rate-limit headers added. Re-record when keys exist.
+- `claude-agent-sdk` is API key only. Claude Code runs with `settingSources: []`, its own
+  `CLAUDE_CONFIG_DIR` under Orzeus's data folder and a replaced environment, so it never sees a
+  claude.ai login or user settings. `canUseTool` turns edits, commands and fetches into Orzeus
+  approvals; reads inside the worktree and the gateway's MCP tools are allowed; anything else is
+  refused. Steering pushes a user message into the streaming input.
+- `openai-api` reuses the Chat Completions tool loop (now configurable: identity, prices,
+  rate-limit headers, `max_completion_tokens`, no temperature) and is also a planner.
+- `codex-exec` and `cursor-cli` have no per-action approvals (exec runs with
+  `approval_policy="never"` in the workspace-write sandbox; cursor-agent needs `--force` in
+  print mode with its sandbox on). Writes stay confined by the CLI's sandbox and are checked by
+  the scope guard afterwards. Cursor reports no tokens; usage is estimated (4 characters per
+  token) and the adapter says so.
+- `acp`: Orzeus is the client. It serves `fs/read_text_file` and `fs/write_text_file` inside the
+  worktree only, offers no terminal, answers `session/request_permission` with its policy, and
+  passes the gateway as an HTTP MCP server when the agent supports it. Configure agents with
+  `--acp "acp-name=command args"` or `ORZEUS_ACP_AGENTS` (JSON) for the desktop sidecar.
+- Turning adapters on: Codex (`--enable-codex`, now both app-server and exec on the same
+  account), Cursor (`--enable-cursor` / `ORZEUS_ENABLE_CURSOR=1`, login or `CURSOR_API_KEY`),
+  Agent SDK and OpenAI API whenever their key is in the Keychain.
+- Quota and soft caps: every observation (official reads, Claude rate-limit events, OpenAI
+  headers) is stored in `quota_observations` against a `provider_accounts` row; the latest
+  window per account feeds `quotaHold` in core. A window that is limited, or at or above its
+  soft cap, holds new work on that account until it resets (or a minute, if the reset is
+  unknown). Soft caps live in `provider_accounts.soft_caps_json`; Settings → Usage limits sets
+  them and the quota strip marks them. No migration was needed: the tables were in 0001.
+- Not done: "Frontier Quota Saved" in window percent (still a token count), usage_samples
+  projections, and per-account enable/disable in the UI (adapters are turned on by flags and keys).
 
 ## Phase 7: Hardening and packaging (about 1 week)
 

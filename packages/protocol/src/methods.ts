@@ -114,6 +114,18 @@ export const methods = {
   },
 
   "quota.read": { params: empty, result: QuotaReport },
+  /**
+   * Sets the usage percent of one account window at which no new work starts on that account;
+   * null clears it. Running work is not interrupted.
+   */
+  "quota.setSoftCap": {
+    params: z.strictObject({
+      accountId: z.string().min(1),
+      window: z.string().min(1),
+      percent: z.number().gt(0).max(100).nullable(),
+    }),
+    result: ok,
+  },
   "settings.read": { params: empty, result: SettingsView },
   "mcp.list": { params: empty, result: z.array(McpServerView) },
   /** Creates or updates a server; changes apply to runs started afterwards. */
@@ -140,6 +152,8 @@ export const methods = {
 export const notifications = {
   /** A run's state changed (new events were appended). */
   "run.updated": z.object({ runId: RunId, status: z.string(), headSeq: z.int() }),
+  /** Soft caps or quota observations changed. */
+  "quota.changed": z.object({}),
   /** The approvals inbox changed. */
   "approvals.changed": z.object({ pending: z.int() }),
   /** A human-readable progress line, as the CLI would print it. */

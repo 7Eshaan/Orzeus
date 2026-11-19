@@ -32,6 +32,8 @@ export interface ServiceOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly ollamaUrl?: string;
   readonly enableCodex?: boolean;
+  readonly enableCursor?: boolean;
+  readonly acpAgents?: EngineConfig["acpAgents"];
   readonly worker?: string;
   readonly planner?: string;
   /** Test seams, passed to createEngine. */
@@ -74,7 +76,7 @@ export class EngineService {
   readonly #active = new Map<RunId, Promise<unknown>>();
   readonly #planner: string | null;
   readonly #worker: string;
-  #quotaCache: { at: number; value: MethodResult<"quota.read">["accounts"] } | null = null;
+  #quotaReadAt: number | null = null;
 
   constructor(options: ServiceOptions) {
     this.#o = options;
@@ -92,6 +94,8 @@ export class EngineService {
       logger: options.logger,
       env,
       enableCodex: options.enableCodex ?? false,
+      enableCursor: options.enableCursor ?? false,
+      ...(options.acpAgents === undefined ? {} : { acpAgents: options.acpAgents }),
       ...(options.ollamaUrl === undefined ? {} : { openAiCompatibleUrl: options.ollamaUrl }),
       ...(this.#planner === null ? {} : { frontier: this.#planner }),
       decideGate: (gate) => this.#ask(gate),
@@ -353,6 +357,11 @@ export class EngineService {
         this.#notifyInbox();
         return ok;
       },
+      "quota.setSoftCap": ({ accountId, window, percent }) => {
+        engine.telemetry.setSoftCap(accountId, window, percent);
+        this.#o.notify("quota.changed" satisfies NotificationName, {});
+        return ok;
+      },
       "quota.read": async () => {
         const runs = engine.store.runIds().map((id) => this.#state(id).totals);
         const totals = runs.reduce(
@@ -401,6 +410,7 @@ export class EngineService {
             anthropic: Boolean(env["ANTHROPIC_API_KEY"]),
             gemini: Boolean(env["GEMINI_API_KEY"]),
             openai: Boolean(env["OPENAI_API_KEY"]),
+            cursor: Boolean(env["CURSOR_API_KEY"]),
           },
           codexEnabled: this.#o.enableCodex ?? false,
         };
@@ -427,28 +437,46 @@ export class EngineService {
     };
   }
 
-  /** Official quota signals (free reads, no tokens), cached for a minute. */
+  /**
+   * Every account the engine uses, with the latest observation of each window from any source
+   * (official reads, CLI events, response headers) and its soft caps. Official quota reads are
+   * free (no tokens) and refreshed at most once a minute.
+   */
   async #quotas(): Promise<MethodResult<"quota.read">["accounts"]> {
-    if (this.#quotaCache !== null && Date.now() - this.#quotaCache.at < 60_000)
-      return this.#quotaCache.value;
-    const accounts: MethodResult<"quota.read">["accounts"] = [];
-    for (const id of this.engine.workers.ids()) {
-      const entry = this.engine.workers.get(id);
-      if (entry === undefined) continue;
-      const windows =
-        entry.adapter.readQuota === undefined
-          ? []
-          : await entry.adapter
-              .readQuota(entry.account, AbortSignal.timeout(15_000))
-              .catch(() => []);
-      accounts.push({
-        accountId: entry.account.accountId as AccountId,
-        label: entry.account.label,
+    const engine = this.engine;
+    if (this.#quotaReadAt === null || Date.now() - this.#quotaReadAt >= 60_000) {
+      this.#quotaReadAt = Date.now();
+      for (const id of engine.workers.ids()) {
+        const entry = engine.workers.get(id);
+        if (entry?.adapter.readQuota === undefined) continue;
+        const windows = await entry.adapter
+          .readQuota(entry.account, AbortSignal.timeout(15_000))
+          .catch(() => []);
+        engine.telemetry.recordQuota(windows);
+      }
+    }
+    const now = Date.now();
+    const latest = engine.telemetry
+      .latestQuota()
+      .filter((w) => w.resetsAt === null || w.resetsAt > now);
+    const accounts = new Map<string, MethodResult<"quota.read">["accounts"][number]>();
+    const entries = [
+      ...engine.workers.ids().flatMap((id) => {
+        const entry = engine.workers.get(id);
+        return entry === undefined ? [] : [{ id, ...entry }];
+      }),
+      ...[...engine.planners].map(([id, entry]) => ({ id, ...entry })),
+    ];
+    for (const { id, account } of entries) {
+      if (accounts.has(account.accountId)) continue;
+      accounts.set(account.accountId, {
+        accountId: account.accountId as AccountId,
+        label: account.label,
         adapter: id,
-        windows: [...windows],
+        windows: latest.filter((w) => w.accountId === account.accountId),
+        softCaps: engine.telemetry.softCaps(account.accountId),
       });
     }
-    this.#quotaCache = { at: Date.now(), value: accounts };
-    return accounts;
+    return [...accounts.values()];
   }
 }

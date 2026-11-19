@@ -211,7 +211,12 @@ describe("EngineService", () => {
     expect(settings.adapters.map((a) => a.id)).toEqual(
       expect.arrayContaining(["fake-planner", "openai-compatible"]),
     );
-    expect(settings.secrets).toEqual({ anthropic: false, gemini: false, openai: false });
+    expect(settings.secrets).toEqual({
+      anthropic: false,
+      gemini: false,
+      openai: false,
+      cursor: false,
+    });
   });
 
   it("lets a person edit the proposed plan, and runs the edited plan", async () => {
@@ -364,5 +369,57 @@ describe("EngineService", () => {
     await h["mcp.remove"]({ id: "broken" });
     await h["mcp.remove"]({ id: "notes" });
     expect(await h["mcp.list"]({})).toEqual([]);
+  });
+
+  it("holds new work on an account over its soft cap until the window resets", async () => {
+    const resetsAt = Date.now() + 1_500;
+    service.engine.telemetry.recordQuota([
+      {
+        accountId: "fake" as never,
+        window: "5h",
+        usedPercent: 90,
+        resetsAt,
+        status: "warning",
+        source: "official_api",
+        observedAt: Date.now(),
+      },
+    ]);
+    await h["quota.setSoftCap"]({ accountId: "fake", window: "5h", percent: 80 });
+    const quota = await h["quota.read"]({});
+    expect(quota.accounts.find((a) => a.accountId === "fake")).toMatchObject({
+      softCaps: { "5h": 80 },
+      windows: [{ window: "5h", usedPercent: 90 }],
+    });
+    expect(notes.some((n) => n.method === "quota.changed")).toBe(true);
+
+    const { runId } = await h["runs.start"]({ goal: "Wait for quota", repo });
+    await until(
+      () => h["runs.get"]({ runId }),
+      (d) => d.awaitingPlanApproval && !d.active,
+    );
+    await h["runs.approvePlan"]({ runId });
+    const gate = await until(
+      () => h["approvals.list"]({}),
+      (g) => g.some((x) => x.runId === runId),
+    );
+    await h["approvals.answer"]({
+      id: gate.find((x) => x.runId === runId)?.id ?? "",
+      decision: "approve",
+    });
+    await until(
+      () => h["runs.get"]({ runId }),
+      (d) => d.status === "completed" && !d.active,
+    );
+    const events = (await h["runs.events"]({ runId })).map((e) => parseTraceEvent(e));
+    const tripped = events.find((r) => r.ok && r.value.type === "budget.tripped");
+    expect(tripped?.ok && tripped.value.payload).toEqual({
+      scope: "account",
+      limit: "fake 5h",
+      limitValue: 80,
+      observed: 90,
+    });
+    const dispatched = events.filter((r) => r.ok && r.value.type === "node.dispatched");
+    expect(dispatched.every((r) => r.ok && r.value.ts >= resetsAt)).toBe(true);
+    await h["quota.setSoftCap"]({ accountId: "fake", window: "5h", percent: null });
   });
 });

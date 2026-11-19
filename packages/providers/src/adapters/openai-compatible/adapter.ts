@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { TokenUsage } from "@orzeus/schema";
+import type { AccountId, QuotaWindow, TokenUsage } from "@orzeus/schema";
 import type {
   AccountContext,
   AdapterManifest,
@@ -9,6 +9,8 @@ import type {
   ProviderAdapter,
   SessionRequest,
 } from "../../adapter.js";
+import { USER_AGENT } from "../../http.js";
+import { costOf, pricesFor, type TokenPrices } from "../../pricing.js";
 import { SessionController } from "../../session.js";
 import {
   type GenerateRequest,
@@ -38,6 +40,21 @@ export interface OpenAiCompatibleConfig {
    * budget on hidden reasoning; "none" or "low" keeps them answering.
    */
   readonly reasoningEffort?: "none" | "low" | "medium" | "high";
+  /** Another identity for the same wire protocol (the hosted OpenAI API uses this). */
+  readonly manifest?: AdapterManifest;
+  /** Prices per model, for cost accounting; local endpoints are free. */
+  readonly prices?: Readonly<Record<string, TokenPrices>>;
+  /** Reads rate-limit headers into quota windows (hosted APIs). */
+  readonly quotaFromHeaders?: (
+    accountId: AccountId,
+    headers: Headers,
+    now: number,
+  ) => QuotaWindow[];
+  /** Reasoning models reject a temperature; false leaves it out. Default true. */
+  readonly sendTemperature?: boolean;
+  /** Hosted OpenAI models take max_completion_tokens instead of max_tokens. */
+  readonly maxTokensField?: "max_tokens" | "max_completion_tokens";
+  readonly suggestedTier?: "local" | "worker" | "frontier";
 }
 
 interface ChatMessage {
@@ -112,13 +129,31 @@ function toUsage(raw: ChatResponse["usage"]): TokenUsage {
  * through an approval request, so the engine's policy decides before the file changes.
  */
 export class OpenAiCompatibleAdapter implements ProviderAdapter {
-  readonly manifest: AdapterManifest = OPENAI_COMPATIBLE_MANIFEST;
+  readonly manifest: AdapterManifest;
   readonly #config: OpenAiCompatibleConfig;
   readonly #fetch: typeof fetch;
 
   constructor(config: OpenAiCompatibleConfig) {
     this.#config = config;
+    this.manifest = config.manifest ?? OPENAI_COMPATIBLE_MANIFEST;
     this.#fetch = config.fetch ?? fetch;
+  }
+
+  #cost(model: string, usage: TokenUsage): number {
+    const table = this.#config.prices;
+    return table === undefined ? 0 : (costOf(pricesFor(table, model), usage) ?? 0);
+  }
+
+  #quota(account: AccountContext, response: Response): QuotaWindow[] {
+    return this.#config.quotaFromHeaders?.(account.accountId, response.headers, Date.now()) ?? [];
+  }
+
+  #temperature(value: number): { temperature?: number } {
+    return this.#config.sendTemperature === false ? {} : { temperature: value };
+  }
+
+  #maxTokens(value: number): Record<string, number> {
+    return { [this.#config.maxTokensField ?? "max_tokens"]: value };
   }
 
   async probe(account: AccountContext, signal: AbortSignal): Promise<ProbeResult> {
@@ -146,12 +181,17 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   async listModels(account: AccountContext, signal: AbortSignal): Promise<readonly ModelInfo[]> {
     const response = await this.#request("GET", "/models", undefined, account, signal);
     const body = (await response.json()) as { data?: { id: string }[] };
-    return (body.data ?? []).map((m) => ({
-      model: m.id,
-      suggestedTier: "local",
-      contextWindow: null,
-      pricing: null,
-    }));
+    return (body.data ?? []).map((m) => {
+      const prices =
+        this.#config.prices === undefined ? null : pricesFor(this.#config.prices, m.id);
+      return {
+        model: m.id,
+        suggestedTier: this.#config.suggestedTier ?? "local",
+        contextWindow: null,
+        pricing:
+          prices === null ? null : { inputPerMTok: prices.input, outputPerMTok: prices.output },
+      };
+    });
   }
 
   /**
@@ -181,8 +221,8 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           type: "json_schema",
           json_schema: { name: request.output.name, schema, strict: true },
         },
-        max_tokens: request.maxOutputTokens,
-        temperature: 0,
+        ...this.#maxTokens(request.maxOutputTokens),
+        ...this.#temperature(0),
         ...this.#reasoning(),
       },
       account,
@@ -191,11 +231,12 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     if (constrained.ok) {
       const body = (await constrained.json()) as ChatResponse;
       const text = body.choices?.[0]?.message?.content ?? "";
+      const usage = toUsage(body.usage);
       return {
         value: parseJsonOutput(text, request.output),
-        usage: toUsage(body.usage),
-        costMicroUsd: 0,
-        quota: [],
+        usage,
+        costMicroUsd: this.#cost(request.model, usage),
+        quota: this.#quota(account, constrained),
         latencyMs: Date.now() - started,
       };
     }
@@ -232,8 +273,8 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           },
         ],
         tool_choice: { type: "function", function: { name: toolName } },
-        max_tokens: request.maxOutputTokens,
-        temperature: 0,
+        ...this.#maxTokens(request.maxOutputTokens),
+        ...this.#temperature(0),
         ...this.#reasoning(),
       },
       account,
@@ -246,11 +287,12 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
     const call =
       message?.tool_calls?.find((c) => c.function.name === toolName) ?? message?.tool_calls?.[0];
     const text = call?.function.arguments ?? message?.content ?? "";
+    const usage = toUsage(body.usage);
     return {
       value: parseJsonOutput(text, request.output),
-      usage: toUsage(body.usage),
-      costMicroUsd: 0,
-      quota: [],
+      usage,
+      costMicroUsd: this.#cost(request.model, usage),
+      quota: this.#quota(account, viaTool),
       latencyMs: Date.now() - started,
     };
   }
@@ -320,8 +362,15 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: request.prompt },
     ];
+    let totalCost = 0;
     const done = (status: "completed" | "needs_input" | "budget_exceeded", summary: string) =>
-      controller.finish({ status, summary, costMicroUsd: 0, resume: null, errorClass: null });
+      controller.finish({
+        status,
+        summary,
+        costMicroUsd: totalCost,
+        resume: null,
+        errorClass: null,
+      });
 
     for (let turn = 1; turn <= request.budget.maxTurns; turn++) {
       if (controller.finished) return;
@@ -336,16 +385,20 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
           messages,
           tools,
           tool_choice: "auto",
-          temperature: this.#config.temperature ?? 0.2,
+          ...this.#temperature(this.#config.temperature ?? 0.2),
           ...this.#reasoning(),
         },
         account,
         signal,
       );
+      const quota = this.#quota(account, response);
+      if (quota.length > 0) controller.emit({ type: "quota", windows: quota });
       if (!response.ok)
         throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
       const body = (await response.json()) as ChatResponse;
-      controller.emit({ type: "usage", usage: toUsage(body.usage), costMicroUsd: 0 });
+      const usage = toUsage(body.usage);
+      totalCost += this.#cost(request.model, usage);
+      controller.emit({ type: "usage", usage, costMicroUsd: this.#cost(request.model, usage) });
 
       const message = body.choices?.[0]?.message;
       if (message === undefined) throw new Error("response had no message");
@@ -487,7 +540,7 @@ export class OpenAiCompatibleAdapter implements ProviderAdapter {
   ): Promise<Response> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
-      "user-agent": "orzeus/0.0.0",
+      "user-agent": USER_AGENT,
     };
     const auth = account.auth;
     if (auth.kind === "api_key")

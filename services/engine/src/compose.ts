@@ -3,21 +3,26 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import type { Clock, Random, RunState } from "@orzeus/core";
+import { type Clock, quotaHold, type Random, type RunState } from "@orzeus/core";
 import { Git, WorktreeManager } from "@orzeus/git";
 import { describeUpstream, McpGateway } from "@orzeus/mcp-gateway";
 import { MemoryStore } from "@orzeus/memory-server";
 import {
   type AccountContext,
+  AcpAdapter,
   AdapterRegistry,
   AnthropicApiAdapter,
+  ClaudeAgentSdkAdapter,
   CodexAppServerAdapter,
+  CodexExecAdapter,
+  CursorCliAdapter,
   GeminiApiAdapter,
+  OpenAiApiAdapter,
   OpenAiCompatibleAdapter,
   type ProviderAdapter,
 } from "@orzeus/providers";
 import { type AccountId, DEFAULT_POLICY, type ModelRef, type PolicyDocument } from "@orzeus/schema";
-import { type Db, McpServers, openStore, RunLocks, SqliteRunStore } from "@orzeus/store";
+import { type Db, McpServers, openStore, RunLocks, SqliteRunStore, Telemetry } from "@orzeus/store";
 import type { Logger } from "./logger.js";
 import { McpServerRegistry } from "./mcp-servers.js";
 import {
@@ -36,8 +41,12 @@ export interface EngineConfig {
   readonly policy?: PolicyDocument;
   /** OpenAI-compatible endpoint for local models; default Ollama on localhost. */
   readonly openAiCompatibleUrl?: string;
-  /** Codex uses the user's own subscription, so it is opt-in. */
+  /** Codex uses the user's own subscription, so it is opt-in (app-server and exec adapters). */
   readonly enableCodex?: boolean;
+  /** Cursor's CLI uses the user's own login or CURSOR_API_KEY, so it is opt-in too. */
+  readonly enableCursor?: boolean;
+  /** Agents that speak ACP v1 over stdio, each its own worker adapter. */
+  readonly acpAgents?: readonly AcpAgentConfig[];
   /** reasoning_effort for local models; small "thinking" models need "none" or "low" to answer in budget. */
   readonly localReasoningEffort?: "none" | "low" | "medium" | "high";
   /** Headless approval of the merge into your branch (the CLI asks interactively instead). */
@@ -70,6 +79,8 @@ export interface Engine {
   readonly memory: MemoryStore;
   /** Upstream MCP servers the user configured; enabled ones join every run's gateway. */
   readonly mcpServers: McpServerRegistry;
+  /** Accounts, quota observations and soft caps. */
+  readonly telemetry: Telemetry;
   readonly git: Git;
   readonly orchestrator: RunOrchestrator;
   /** Adapters that can plan (structured output), keyed by adapter id. */
@@ -106,6 +117,35 @@ function account(
   };
 }
 
+export interface AcpAgentConfig {
+  /** Adapter id, e.g. "acp-gemini"; must start with "acp". */
+  readonly id: string;
+  readonly displayName?: string;
+  readonly command: readonly [string, ...string[]];
+}
+
+/**
+ * Parses ACP agents from "id=command args…" strings (CLI) or a JSON array (ORZEUS_ACP_AGENTS):
+ * [{"id": "acp-gemini", "command": ["gemini", "--experimental-acp"]}].
+ */
+export function parseAcpAgents(values: readonly string[]): AcpAgentConfig[] {
+  return values.flatMap((value): AcpAgentConfig[] => {
+    const text = value.trim();
+    if (text === "") return [];
+    if (text.startsWith("[")) {
+      const parsed = JSON.parse(text) as AcpAgentConfig[];
+      return parsed.flatMap((a) => parseAcpAgents([`${a.id}=${JSON.stringify(a.command)}`]));
+    }
+    const eq = text.indexOf("=");
+    const id = text.slice(0, eq).trim();
+    const rest = text.slice(eq + 1).trim();
+    const command = (rest.startsWith("[") ? JSON.parse(rest) : rest.split(/\s+/)) as string[];
+    if (eq <= 0 || !/^acp[a-z0-9-]*$/.test(id) || command.length === 0 || command[0] === "")
+      throw new Error(`expected acp-name=command, got "${value}"`);
+    return [{ id, command: command as [string, ...string[]] }];
+  });
+}
+
 export function defaultAdapters(config: EngineConfig): AdapterRegistry {
   const env = config.env ?? process.env;
   const registry = new AdapterRegistry();
@@ -122,6 +162,45 @@ export function defaultAdapters(config: EngineConfig): AdapterRegistry {
   if (config.enableCodex) {
     const codex = new CodexAppServerAdapter({ clientVersion: ENGINE_VERSION });
     registry.register(codex, account("codex-cli-login", "Codex (your login)", codex, env));
+    // The same login as the app-server adapter: one account, so its quota applies to both.
+    const exec = new CodexExecAdapter();
+    registry.register(exec, account("codex-cli-login", "Codex (your login)", exec, env));
+  }
+  if (config.enableCursor) {
+    const cursor = new CursorCliAdapter();
+    registry.register(
+      cursor,
+      env["CURSOR_API_KEY"]
+        ? {
+            ...account("cursor-api-key", "Cursor API key", cursor, env),
+            auth: { kind: "api_key", secretName: "cursor", envVar: "CURSOR_API_KEY" },
+            getSecret: async () => env["CURSOR_API_KEY"] ?? "",
+          }
+        : account("cursor-cli-login", "Cursor (your login)", cursor, env),
+    );
+  }
+  if (env["ANTHROPIC_API_KEY"]) {
+    const claude = new ClaudeAgentSdkAdapter({
+      stateDir: config.dataDir,
+      clientVersion: ENGINE_VERSION,
+    });
+    registry.register(claude, account("anthropic-api-key", "Anthropic API", claude, env));
+  }
+  if (env["OPENAI_API_KEY"]) {
+    const openai = new OpenAiApiAdapter();
+    registry.register(openai, account("openai-api-key", "OpenAI API", openai, env));
+  }
+  for (const agent of config.acpAgents ?? []) {
+    const acp = new AcpAdapter({
+      id: agent.id,
+      displayName: agent.displayName ?? agent.id,
+      command: agent.command,
+      clientVersion: ENGINE_VERSION,
+    });
+    registry.register(acp, {
+      ...account(agent.id, agent.displayName ?? agent.id, acp, env),
+      auth: { kind: "none" },
+    });
   }
   return registry;
 }
@@ -156,6 +235,13 @@ function plannerAdapters(
     map.set(anthropic.manifest.id, {
       adapter: anthropic,
       account: account("anthropic-api-key", "Anthropic API", anthropic, env),
+    });
+  }
+  if (env["OPENAI_API_KEY"]) {
+    const openai = new OpenAiApiAdapter();
+    map.set(openai.manifest.id, {
+      adapter: openai,
+      account: account("openai-api-key", "OpenAI API", openai, env),
     });
   }
   if (env["GEMINI_API_KEY"]) {
@@ -236,6 +322,7 @@ export function createEngine(config: EngineConfig): Engine {
   const store = new SqliteRunStore(db);
   const memory = new MemoryStore(join(config.dataDir, "memory.db"));
   const mcpServers = new McpServerRegistry(new McpServers(db), config.env ?? process.env);
+  const telemetry = new Telemetry(db);
   const git = new Git();
   const workers = config.adapters ?? defaultAdapters(config);
   const planners = plannerAdapters(config);
@@ -254,6 +341,23 @@ export function createEngine(config: EngineConfig): Engine {
       account: entry.account,
     };
   };
+  // Every account the engine may use gets a row, so quota and soft caps can refer to it.
+  for (const { adapter, account: acct } of [
+    ...workers.ids().flatMap((id) => {
+      const entry = workers.get(id);
+      return entry === undefined ? [] : [entry];
+    }),
+    ...planners.values(),
+  ]) {
+    telemetry.ensureAccount({
+      id: acct.accountId,
+      provider: adapter.manifest.provider,
+      adapter: adapter.manifest.id,
+      label: acct.label,
+      authKind: acct.auth.kind,
+      secretRef: acct.auth.kind === "api_key" ? acct.auth.secretName : null,
+    });
+  }
   const frontier: FrontierModel | undefined =
     config.frontier === undefined ? undefined : resolvePlanner(config.frontier);
   const ttl = config.lockTtlMs ?? 15_000;
@@ -270,6 +374,15 @@ export function createEngine(config: EngineConfig): Engine {
     lock: { locks: new RunLocks(db), ttlMs: ttl, heartbeatMs: Math.max(100, Math.floor(ttl / 3)) },
     ...(frontier === undefined ? {} : { frontier }),
     ...(config.progress === undefined ? {} : { progress: config.progress }),
+    quota: {
+      hold: (accountId, now) =>
+        quotaHold(
+          telemetry.latestQuota().filter((w) => w.accountId === accountId),
+          telemetry.softCaps(accountId),
+          now,
+        ),
+      observe: (windows) => telemetry.recordQuota(windows),
+    },
     ...(config.gateway === false
       ? {}
       : {
@@ -286,6 +399,7 @@ export function createEngine(config: EngineConfig): Engine {
     store,
     memory,
     mcpServers,
+    telemetry,
     git,
     orchestrator,
     planners,

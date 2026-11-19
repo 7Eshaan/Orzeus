@@ -3,7 +3,7 @@
 A local-first multi-agent orchestrator desktop app: frontier models plan, cheap worker models
 build in parallel git worktrees, and only failures and final diffs go back to the frontier.
 
-Status: Phase 5 done: the desktop UI runs, approves and inspects multi-worker runs. Design docs start at [docs/README.md](docs/README.md).
+Status: Phase 6 done: workers on local models, Codex, Claude (Agent SDK), the OpenAI API, Cursor and any ACP agent, with quota-aware routing. Design docs start at [docs/README.md](docs/README.md).
 
 ## Requirements
 

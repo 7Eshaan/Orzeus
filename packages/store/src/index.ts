@@ -20,6 +20,7 @@ export {
   SqliteRunStore,
   TransitionRejectedError,
 } from "./run-store.js";
+export { type AccountRecord, Telemetry } from "./telemetry.js";
 
 import { type Db, openDatabase } from "./db.js";
 import { migrate } from "./migrate.js";

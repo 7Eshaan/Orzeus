@@ -5,6 +5,7 @@ import { useLive } from "../../app/live.ts";
 import { Button, Field, inputClass, Panel, Pill } from "../../ui/components.tsx";
 import { McpServers } from "./McpServers.tsx";
 import styles from "./settings.module.css";
+import { UsageLimits } from "./UsageLimits.tsx";
 
 const KEYS = [
   {
@@ -16,7 +17,12 @@ const KEYS = [
   {
     name: "openai",
     label: "OpenAI API key",
-    help: "Codex with an API key instead of your ChatGPT login.",
+    help: "OpenAI API workers and planner, priced per token.",
+  },
+  {
+    name: "cursor",
+    label: "Cursor API key",
+    help: "Cursor CLI workers without your Cursor login (Cursor workers must be turned on).",
   },
 ] as const;
 
@@ -63,6 +69,7 @@ export function Settings() {
         )}
       </Panel>
       <ApiKeys received={s?.secrets ?? null} />
+      <UsageLimits />
       <McpServers />
       <Memory />
     </div>

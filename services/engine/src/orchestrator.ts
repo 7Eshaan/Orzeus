@@ -12,6 +12,7 @@ import {
   type NodeState,
   nextWakeAt,
   nodeBudgetTrips,
+  type QuotaHold,
   type Random,
   REVIEW_SYSTEM_PROMPT,
   type RunState,
@@ -47,6 +48,7 @@ import {
   type PolicyDocument,
   type ProjectId,
   type ProposedAction,
+  type QuotaWindow,
   ReviewDecision,
   type RunId,
   type Sha256,
@@ -113,6 +115,13 @@ export interface OrchestratorOptions {
   /** Starts a run's MCP gateway with its upstream servers. Without it, workers get no gateway. */
   readonly openGateway?: (state: RunState) => Promise<McpGateway>;
   readonly breakers?: CircuitBreakers;
+  /** Account quota: holds accounts that are limited or over a soft cap, and records observations. */
+  readonly quota?: QuotaPort;
+}
+
+export interface QuotaPort {
+  hold(accountId: string, now: number): QuotaHold | null;
+  observe(windows: readonly QuotaWindow[]): void;
 }
 
 /** One planner model call, recorded in the trace when the plan is proposed. */
@@ -155,6 +164,7 @@ export class RunOrchestrator {
   readonly #active = new Map<string, Promise<void>>();
   readonly #gateways = new Map<RunId, Promise<McpGateway | null>>();
   #stopped = false;
+  readonly #announcedHolds = new Set<string>();
   readonly #heartbeats = new Set<ReturnType<typeof setInterval>>();
   readonly #breakers: CircuitBreakers;
 
@@ -450,7 +460,7 @@ export class RunOrchestrator {
         // A node stays "ready" until its attempt records node.dispatched, so skip ones in flight.
         if (action.kind !== "dispatch" || this.#active.has(action.nodeId)) continue;
         const task = state.dag?.nodes.find((n) => n.id === action.nodeId);
-        const blockedUntil = task === undefined ? null : this.#blockedUntil(task, now);
+        const blockedUntil = task === undefined ? null : this.#blockedUntil(runId, task, now);
         if (blockedUntil !== null) {
           breakerWake = breakerWake === null ? blockedUntil : Math.min(breakerWake, blockedUntil);
           continue;
@@ -512,13 +522,58 @@ export class RunOrchestrator {
     );
   }
 
-  /** When every candidate adapter's circuit breaker is open: the earliest time one reopens. */
-  #blockedUntil(task: TaskNode, now: number): number | null {
+  /** The quota hold on a candidate's account, if any. */
+  #quotaHold(candidate: ModelRef, now: number): QuotaHold | null {
+    const entry = this.#o.adapters.get(candidate.adapter);
+    return entry === undefined ? null : (this.#o.quota?.hold(entry.account.accountId, now) ?? null);
+  }
+
+  #usable(candidate: ModelRef, now: number): boolean {
+    return (
+      this.#breakers.allows(candidate.adapter, now) && this.#quotaHold(candidate, now) === null
+    );
+  }
+
+  /**
+   * When no candidate can take work (circuit breaker open, or the account held by its quota): the
+   * earliest time one may. A quota hold is recorded once per node and window, so the trace and
+   * the progress line say why the node waits.
+   */
+  #blockedUntil(runId: RunId, task: TaskNode, now: number): number | null {
     const candidates = task.candidates.filter((c) => this.#o.adapters.get(c.adapter) !== undefined);
     if (candidates.length === 0) return null; // routing failure is reported by the attempt
-    if (candidates.some((c) => this.#breakers.allows(c.adapter, now))) return null;
-    const times = candidates.map((c) => this.#breakers.retryAt(c.adapter) ?? now);
+    if (candidates.some((c) => this.#usable(c, now))) return null;
+    const times = candidates.map((c) => {
+      const hold = this.#quotaHold(c, now);
+      if (hold !== null) this.#announceHold(runId, task.id, c, hold);
+      return Math.max(this.#breakers.retryAt(c.adapter) ?? now, hold?.until ?? now);
+    });
     return Math.min(...times);
+  }
+
+  #announceHold(runId: RunId, nodeId: NodeId, candidate: ModelRef, hold: QuotaHold): void {
+    const entry = this.#o.adapters.get(candidate.adapter);
+    if (entry === undefined) return;
+    const key = `${runId}/${nodeId}/${entry.account.accountId}/${hold.window}/${hold.until}`;
+    if (this.#announcedHolds.has(key)) return;
+    this.#announcedHolds.add(key);
+    this.#append(runId, [
+      this.#draft(
+        runId,
+        "budget.tripped",
+        {
+          scope: "account",
+          limit: `${entry.account.accountId} ${hold.window}`,
+          limitValue: hold.cap ?? 100,
+          observed: hold.usedPercent ?? 100,
+        },
+        { nodeId },
+      ),
+    ]);
+    const wait = Math.max(0, hold.until - this.#o.clock.now());
+    this.#say(
+      `${nodeId}: waiting for ${entry.account.label}: ${hold.reason}; checking again in ${Math.ceil(wait / 60_000)} min.`,
+    );
   }
 
   // ───────────────────────── Attempts ─────────────────────────
@@ -549,7 +604,7 @@ export class RunOrchestrator {
     if (dag === null || task === undefined) throw new Error(`unknown node ${nodeId}`);
 
     const now = this.#o.clock.now();
-    const allowed = task.candidates.filter((c) => this.#breakers.allows(c.adapter, now));
+    const allowed = task.candidates.filter((c) => this.#usable(c, now));
     const pick = this.#o.adapters.pick(allowed);
     if (pick === null) {
       this.#fail(
@@ -850,6 +905,7 @@ export class RunOrchestrator {
             this.#append(runId, [
               this.#draft(runId, "quota.observed", { windows: [...event.windows] }, at),
             ]);
+            this.#o.quota?.observe(event.windows);
             break;
           case "ambiguity":
             this.#say(`${nodeId}: worker reports ambiguity: ${event.question}`);

@@ -15,7 +15,7 @@ export interface Live<T> {
 export function useLive<T>(
   load: (() => Promise<T>) | null,
   deps: readonly unknown[],
-  events: readonly ("run.updated" | "approvals.changed")[] = ["run.updated"],
+  events: readonly ("run.updated" | "approvals.changed" | "quota.changed")[] = ["run.updated"],
   pollMs = 15_000,
 ): Live<T> {
   const client = useEngineClient();

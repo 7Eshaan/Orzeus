@@ -23,9 +23,12 @@ node services/engine/dist/cli.js status <runId>     # nodes and checkpoints
 node services/engine/dist/cli.js rollback <runId> <checkpointId>   # then resume
 ```
 
-Plans are hand-written for now (see `src/plan-file.ts` and `fixtures/calc/plan.json`); the
-frontier planner replaces them in Phase 3. Local models are the default worker; Codex is
-opt-in with `--enable-codex` because it spends your own quota. Headless runs have no human, so
+Hand-written plans are in `src/plan-file.ts` (example: `fixtures/calc/plan.json`); `--goal`
+asks the frontier planner instead. Local models are the default worker. Codex
+(`--enable-codex`, app-server and exec) and Cursor (`--enable-cursor`) are opt-in because they
+spend your own quota; the Claude Agent SDK and OpenAI API workers appear when
+`ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set; `--acp "acp-name=command args"` adds any ACP v1
+agent. Headless runs have no human, so
 actions the policy would ask about are denied unless you pass `--approve-asks`.
 
 The calc fixture (`fixtures/calc/repo`) is a tiny repo with tests but no implementations.

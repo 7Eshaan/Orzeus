@@ -89,7 +89,10 @@ export const AccountQuota = z.object({
   accountId: z.string(),
   label: z.string(),
   adapter: z.string(),
+  /** Latest observation of each window that has not reset yet, from any source. */
   windows: z.array(QuotaWindow),
+  /** Window name → percent at which Orzeus stops starting new work on this account. */
+  softCaps: z.record(z.string(), z.number()),
 });
 
 export const QuotaReport = z.object({
@@ -117,7 +120,12 @@ export const SettingsView = z.object({
   adapters: z.array(AdapterInfo),
   defaults: z.object({ planner: z.string().nullable(), worker: z.string() }),
   /** Which API keys the engine received (never the keys themselves). */
-  secrets: z.object({ anthropic: z.boolean(), gemini: z.boolean(), openai: z.boolean() }),
+  secrets: z.object({
+    anthropic: z.boolean(),
+    gemini: z.boolean(),
+    openai: z.boolean(),
+    cursor: z.boolean(),
+  }),
   codexEnabled: z.boolean(),
 });
 export type SettingsView = z.infer<typeof SettingsView>;

@@ -7,7 +7,7 @@ import type { RunState } from "@orzeus/core";
 import { MEMORY_KINDS, type MemoryKind } from "@orzeus/memory-server";
 import type { CheckpointId, PlannerOutput, RunId } from "@orzeus/schema";
 import { exportJsonl } from "@orzeus/trace";
-import { createEngine, type Engine, headlessGate } from "./compose.js";
+import { createEngine, type Engine, headlessGate, parseAcpAgents } from "./compose.js";
 import { ulid } from "./ids.js";
 import { createJsonLogger } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
@@ -40,7 +40,9 @@ Options:
   --data-dir <dir>      Database, memory and worktrees (default: ${defaultDataDir()})
   --ollama-url <url>    OpenAI-compatible endpoint for local models (default: http://localhost:11434/v1)
   --local-reasoning <none|low|medium|high>  reasoning_effort for local models (small thinking models need none)
-  --enable-codex        Allow Codex workers (uses your own Codex login and quota)
+  --enable-codex        Allow Codex workers: codex-app-server and codex-exec (your own login and quota)
+  --enable-cursor       Allow Cursor CLI workers (your own cursor-agent login, or CURSOR_API_KEY)
+  --acp <id=command>    Add an ACP v1 agent as a worker, e.g. --acp "acp-gemini=gemini --experimental-acp" (repeatable)
   --no-gateway          Do not start the MCP gateway
   --verbose             Structured engine logs on stderr
 `;
@@ -120,6 +122,8 @@ async function main(argv: readonly string[]): Promise<number> {
       "ollama-url": { type: "string" },
       "local-reasoning": { type: "string" },
       "enable-codex": { type: "boolean", default: false },
+      "enable-cursor": { type: "boolean", default: false },
+      acp: { type: "string", multiple: true, default: [] },
       "approve-plan": { type: "boolean", default: false },
       "approve-asks": { type: "boolean", default: false },
       "approve-merge": { type: "boolean", default: false },
@@ -160,6 +164,8 @@ async function main(argv: readonly string[]): Promise<number> {
       if (values.verbose) process.stderr.write(line);
     }),
     enableCodex: values["enable-codex"],
+    enableCursor: values["enable-cursor"],
+    acpAgents: parseAcpAgents(values.acp),
     gateway: !values["no-gateway"],
     ...(values["ollama-url"] === undefined ? {} : { openAiCompatibleUrl: values["ollama-url"] }),
     ...(values["local-reasoning"] === undefined

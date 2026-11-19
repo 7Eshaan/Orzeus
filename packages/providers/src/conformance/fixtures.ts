@@ -7,6 +7,8 @@ export interface HttpExchange {
   readonly requestBody: unknown;
   readonly status: number;
   readonly responseBody: unknown;
+  /** Headers worth replaying (rate limits); recordings keep only those. */
+  readonly responseHeaders?: Readonly<Record<string, string>>;
 }
 
 /** Wraps fetch to append every exchange to a JSONL fixture file. */
@@ -67,7 +69,7 @@ export function replayFetch(
       exchange.responseBody === null ? "" : JSON.stringify(exchange.responseBody),
       {
         status: exchange.status,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...exchange.responseHeaders },
       },
     );
   };

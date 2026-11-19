@@ -141,11 +141,21 @@
   color: var(--color-text-muted);
 }
 .bar {
+  position: relative;
   width: 140px;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--color-border);
   overflow: hidden;
+}
+/* Where a soft cap pauses new work. */
+.cap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--color-text);
 }
 .fill {
   display: block;

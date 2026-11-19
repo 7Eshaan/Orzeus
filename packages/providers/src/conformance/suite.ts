@@ -20,6 +20,8 @@ export interface ConformanceHarness {
     readonly adapter: ProviderAdapter;
     readonly request: SessionRequest;
     readonly pid?: () => number | undefined;
+    /** Defaults to TEST_ACCOUNT; API-key adapters pass an account with a (fake) key. */
+    readonly account?: AccountContext;
   }>;
 }
 
@@ -179,8 +181,8 @@ export function describeConformance(
     });
 
     it("cancels within two seconds and leaves no process behind", async () => {
-      const { adapter, request, pid } = await (await makeHarness()).hanging();
-      const session = adapter.startSession?.(request, TEST_ACCOUNT);
+      const { adapter, request, pid, account } = await (await makeHarness()).hanging();
+      const session = adapter.startSession?.(request, account ?? TEST_ACCOUNT);
       if (session === undefined) throw new Error("no session");
       const drained = (async () => {
         for await (const _ of session.events) {
