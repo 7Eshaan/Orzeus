@@ -15,6 +15,7 @@ export { globToRegExp, matchesAny, normalizeRelativePath, scopesMayOverlap } fro
 export { type PlanIssue, type PlanValidation, validatePlan } from "./plan-validation.js";
 export { evaluatePolicy, type PolicyContext, type PolicyVerdict } from "./policy.js";
 export type { Clock, Random, RunEventStore } from "./ports.js";
+export { renderPacketPrompt } from "./prompt.js";
 export { applyEvent, replay, type TransitionError } from "./reducer.js";
 export { err, ok, type Result } from "./result.js";
 export {

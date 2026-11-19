@@ -1,0 +1,144 @@
+{
+  "goal": "Implement the calc library so all tests pass.",
+  "budget": {
+    "maxConcurrency": 2
+  },
+  "nodes": [
+    {
+      "id": "add",
+      "title": "Implement add",
+      "candidates": [
+        {
+          "provider": "openai_compatible",
+          "adapter": "openai-compatible",
+          "model": "lfm3:latest"
+        }
+      ],
+      "writeScope": ["src/add.js"],
+      "checks": [
+        {
+          "kind": "command",
+          "id": "test",
+          "label": "Node tests",
+          "argv": ["node", "--test", "test/add.test.js"],
+          "cwd": ".",
+          "timeoutMs": 60000,
+          "expectExitCode": 0
+        }
+      ],
+      "retry": {
+        "baseDelayMs": 500
+      },
+      "packet": {
+        "objective": "Create src/add.js: an ES module that exports a function add(a, b) returning a + b.",
+        "acceptance": [
+          {
+            "statement": "node --test test/add.test.js passes",
+            "checkId": "test"
+          }
+        ],
+        "context": [
+          {
+            "kind": "file_range",
+            "path": "test/add.test.js",
+            "startLine": 1,
+            "endLine": 9,
+            "why": "The test your code must pass."
+          }
+        ],
+        "constraints": ["Use plain JavaScript (ES modules), no dependencies."]
+      }
+    },
+    {
+      "id": "multiply",
+      "title": "Implement multiply",
+      "candidates": [
+        {
+          "provider": "openai_compatible",
+          "adapter": "openai-compatible",
+          "model": "lfm3:latest"
+        }
+      ],
+      "writeScope": ["src/multiply.js"],
+      "checks": [
+        {
+          "kind": "command",
+          "id": "test",
+          "label": "Node tests",
+          "argv": ["node", "--test", "test/multiply.test.js"],
+          "cwd": ".",
+          "timeoutMs": 60000,
+          "expectExitCode": 0
+        }
+      ],
+      "retry": {
+        "baseDelayMs": 500
+      },
+      "packet": {
+        "objective": "Create src/multiply.js: an ES module that exports a function multiply(a, b) returning a * b.",
+        "acceptance": [
+          {
+            "statement": "node --test test/multiply.test.js passes",
+            "checkId": "test"
+          }
+        ],
+        "context": [
+          {
+            "kind": "file_range",
+            "path": "test/multiply.test.js",
+            "startLine": 1,
+            "endLine": 9,
+            "why": "The test your code must pass."
+          }
+        ],
+        "constraints": ["Use plain JavaScript (ES modules), no dependencies."]
+      }
+    },
+    {
+      "id": "index",
+      "title": "Export the library",
+      "dependsOn": ["add", "multiply"],
+      "candidates": [
+        {
+          "provider": "openai_compatible",
+          "adapter": "openai-compatible",
+          "model": "lfm3:latest"
+        }
+      ],
+      "writeScope": ["src/index.js"],
+      "checks": [
+        {
+          "kind": "command",
+          "id": "test",
+          "label": "Node tests",
+          "argv": ["node", "--test", "test/index.test.js"],
+          "cwd": ".",
+          "timeoutMs": 60000,
+          "expectExitCode": 0
+        }
+      ],
+      "retry": {
+        "baseDelayMs": 500
+      },
+      "packet": {
+        "objective": "Create src/index.js: an ES module that re-exports add from ./add.js and multiply from ./multiply.js.",
+        "acceptance": [
+          {
+            "statement": "node --test test/index.test.js passes",
+            "checkId": "test"
+          }
+        ],
+        "context": [
+          {
+            "kind": "file_range",
+            "path": "test/index.test.js",
+            "startLine": 1,
+            "endLine": 9,
+            "why": "The test your code must pass."
+          }
+        ],
+        "constraints": ["Do not modify src/add.js or src/multiply.js."]
+      }
+    }
+  ]
+}

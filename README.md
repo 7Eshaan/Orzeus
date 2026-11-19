@@ -3,7 +3,7 @@
 A local-first multi-agent orchestrator desktop app: frontier models plan, cheap worker models
 build in parallel git worktrees, and only failures and final diffs go back to the frontier.
 
-Status: Phase 0 (foundations) done. Design docs start at [docs/README.md](docs/README.md).
+Status: Phase 2 done: headless runs with real local or Codex workers. Design docs start at [docs/README.md](docs/README.md).
 
 ## Requirements
 
@@ -20,6 +20,7 @@ pnpm dev            # build packages, then open the desktop app with the engine 
 pnpm check          # everything CI runs: Biome, dependency rules, tsc -b, Vitest, fmt/clippy/cargo test
 pnpm test           # TypeScript tests only
 pnpm format         # apply Biome formatting
+node services/engine/dist/cli.js --help   # headless orzeus CLI (after pnpm build)
 ```
 
 ## Layout

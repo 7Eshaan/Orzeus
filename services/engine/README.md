@@ -11,7 +11,24 @@ The orchestration engine. It runs as a sidecar process supervised by the desktop
 This is the composition root: the only place where concrete adapters (SQLite, git, providers)
 are wired into `@orzeus/core` ports.
 
-## Try it
+## Headless CLI (Phase 2)
+
+```bash
+pnpm build
+node services/engine/dist/cli.js run services/engine/fixtures/calc/plan.json --repo <a git repo> --approve-plan
+node services/engine/dist/cli.js resume <runId>     # after a crash or Ctrl-C
+node services/engine/dist/cli.js verify <runId>     # re-check the hash chain and blobs
+node services/engine/dist/cli.js export <runId>     # canonical JSONL trace
+```
+
+Plans are hand-written for now (see `src/plan-file.ts` and `fixtures/calc/plan.json`); the
+frontier planner replaces them in Phase 3. Local models are the default worker; Codex is
+opt-in with `--enable-codex` because it spends your own quota. Headless runs have no human, so
+actions the policy would ask about are denied unless you pass `--approve-asks`.
+
+The calc fixture (`fixtures/calc/repo`) is a tiny repo with tests but no implementations.
+
+## Try the sidecar protocol
 
 ```bash
 pnpm build

@@ -58,6 +58,12 @@ replaying it from scratch yields identical projections.
 
 ## Phase 2: One worker, end to end, headless (about 1 week)
 
+Status: **done** (2026-11-19). Exit check (`ORZEUS_E2E=ollama`): the calc plan ran through the
+`orzeus` CLI with a real local model (lfm3 on Ollama); the process was killed with SIGKILL while
+two nodes were mid-attempt; `orzeus resume` retried them, ran the dependent node, integrated
+the result and the chain verified. Both adapters pass the conformance suite against recorded
+fixtures. See "Phase 2 notes" below for what changed from the plan.
+
 - `@orzeus/git`: worktree create/reset/diff/commit/cleanup.
 - `@orzeus/checks`: argv runner with timeouts, output capture and truncation.
 - First adapters: `codex-app-server` (installed on the Mac, best quota signal) and
@@ -70,6 +76,16 @@ Exit: on a fixture repo, a 3-node hand-written plan runs to green checks with re
 models; killing the engine mid-node and restarting resumes correctly.
 
 **Commit point 4:** `feat(engine): headless single-worker execution`.
+
+### Phase 2 notes
+
+- Worker sessions run concurrently (the scheduler already supported it), not sequentially.
+- A simple integration step landed early: when every node succeeds, results are merged onto
+  the plan's integration branch with `git merge-tree`, so `run.completed` has a real commit.
+  Global checks, review and the merge gate stay in Phase 4.
+- Escalations have no frontier model yet, so they become `node.failed`
+  (`escalation.unavailable`); hand plans default to `maxSteers: 0`.
+- No leases yet: one engine process per database (Phase 4).
 
 ## Phase 3: Planner, context packets, MCP gateway, memory (about 1.5 weeks)
 

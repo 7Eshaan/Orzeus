@@ -1,0 +1,8 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { multiply } from "../src/multiply.js";
+
+test("multiply", () => {
+  assert.equal(multiply(4, 5), 20);
+  assert.equal(multiply(-2, 3), -6);
+});

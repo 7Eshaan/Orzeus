@@ -7,5 +7,30 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../../packages/protocol" }]
+  "references": [
+    {
+      "path": "../../packages/checks"
+    },
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/git"
+    },
+    {
+      "path": "../../packages/protocol"
+    },
+    {
+      "path": "../../packages/providers"
+    },
+    {
+      "path": "../../packages/schema"
+    },
+    {
+      "path": "../../packages/store"
+    },
+    {
+      "path": "../../packages/trace"
+    }
+  ]
 }

@@ -29,6 +29,10 @@ and arguments), why (the packet objective), and for file changes a side-by-side 
 Approve once, Approve for this node, Reject (with a reason the worker sees), Steer (free text
 sent to the worker or, for escalations, to the frontier model).
 
+Headless runs (the `orzeus` CLI) have no human: an `ask` verdict is recorded as an
+`approval.requested` / `approval.resolved` pair decided by the policy actor, and is a denial
+unless the run was started with `--approve-asks`.
+
 ## Budgets and circuit breakers
 
 Checked by `core` on every `usage` and `model.call` event:
@@ -74,8 +78,14 @@ Each worker adapter is configured to use only this gateway: `--mcp-config` for `
   `<data>/worktrees/<project>/<run>/<node>`, on branches `orzeus/<run>/<node>`.
 - Created from `TaskDAG.repo.baseCommit` (or the integration branch for nodes downstream of
   merged work). Orzeus never touches your checked-out working tree.
-- Worker commits are made by Orzeus in the worktree after verification, with trailers
-  `Orzeus-Run`, `Orzeus-Node`, `Orzeus-Trace-Hash`.
+- Worker commits are made by Orzeus in the worktree after the worker finishes, with trailers
+  `Orzeus-Run`, `Orzeus-Node`, `Orzeus-Attempt`. They are built with plumbing (a temporary
+  index, `write-tree`, `commit-tree`, `update-ref`) as `Orzeus <orzeus@localhost>`, so the
+  user's index, hooks and identity are never involved.
+- A node with dependencies starts from its dependencies' results merged together
+  (`merge-tree --write-tree`); a conflict there fails the node before the worker starts.
+- When every node succeeds, the results are merged in topological order onto
+  `TaskDAG.integration.branch`. The user's branch is never moved.
 - Cleanup of finished worktrees is automatic for succeeded runs after integration and manual
   (with confirmation) for failed ones, so you can inspect them.
 - All git calls go through `@orzeus/git` with argv arrays and an explicit `cwd`; nothing is

@@ -1,0 +1,7 @@
+{"dir":"client","msg":{"id":1,"method":"initialize","params":{"clientInfo":{"name":"orzeus","title":"Orzeus","version":"0.0.0"},"capabilities":{"experimentalApi":false,"requestAttestation":false}}}}
+{"dir":"server","msg":{"id":1,"result":{"userAgent":"orzeus/0.169.0 (Mac OS 27.2.0; arm64) unknown (orzeus; 0.0.0)","codexHome":"/Users/user/.codex","platformFamily":"unix","platformOs":"macos"}}}
+{"dir":"server","msg":{"method":"remoteControl/status/changed","params":{"status":"disabled","serverName":"host.local","installationId":"00000000-0000-0000-0000-000000000000","environmentId":null},"emittedAtMs":1795078023455}}
+{"dir":"client","msg":{"method":"initialized"}}
+{"dir":"client","msg":{"id":2,"method":"account/read","params":{}}}
+{"dir":"server","msg":{"method":"account/updated","params":{"authMode":"chatgpt","planType":"free"},"emittedAtMs":1795078024074}}
+{"dir":"server","msg":{"id":2,"result":{"account":{"type":"chatgpt","email":"user@example.com","planType":"free","workspaceName":null},"userId":"user-redacted","requiresOpenaiAuth":true,"workspaceRouting":{"chatgptAccountId":"aea3828e-2b4f-412e-9eec-0983f08f3ebe","backendOrigin":"https://chatgpt.com","accountRoutingOverride":"NO_CONSTRAINT"}}}}

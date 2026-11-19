@@ -42,6 +42,16 @@ sandbox/permission mode set to the strictest useful level for the node (e.g. Cod
 `sandbox: "workspace-write"` scoped to the worktree), and every action they want beyond that is
 routed back to Orzeus's policy engine, which auto-allows, denies, or queues it for you.
 
+### Implemented so far (Phase 2)
+
+- `openai-compatible`: Orzeus's own tool loop (`list_files`, `read_file`, `write_file`,
+  `delete_file`, `report_ambiguity`, `finish`). Every write is an approval request, so the
+  policy blocks out-of-scope writes before they happen.
+- `codex-app-server`: threads start in the node's worktree with `sandbox: "workspace-write"` and
+  `approvalPolicy: "on-request"`; `clientInfo.name` is `orzeus`. Usage comes from
+  `thread/tokenUsage/updated`, quota from `account/rateLimits/*` (window names derive from
+  `windowDurationMins`, e.g. a 30-day free-plan window shows as `30d`). Opt-in in the CLI.
+
 ## How work is routed
 
 For a node with tier `T` and ordered `candidates`, the router picks the first candidate whose:
@@ -77,7 +87,8 @@ in 41 min"), unless the plan allows a fallback tier.
 ## Adapter conformance suite
 
 Every adapter must pass the shared suite in `packages/providers/src/conformance` against
-recorded fixtures (real stream captures from the installed CLI versions, scrubbed):
+recorded fixtures (real captures from the installed versions, scrubbed of personal data with
+`fixtures/codex-app-server/scrub.mjs`):
 
 - maps every event type it claims to support into `AdapterEvent`, with no unknown-event crashes
   (unknown events become `log` events),

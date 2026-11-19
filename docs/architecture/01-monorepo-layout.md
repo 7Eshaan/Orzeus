@@ -61,7 +61,8 @@ orzeus/
 
 ```
 schema  ◀── trace
-schema  ◀── core ◀── store (+ trace), git, checks, mcp-gateway, providers ◀── services/engine
+schema  ◀── git
+schema  ◀── core ◀── store (+ trace), checks, mcp-gateway, providers ◀── services/engine
 schema  ◀── protocol ◀── apps/desktop (UI)        services/engine ──▶ protocol
 ```
 

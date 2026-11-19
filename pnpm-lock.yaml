@@ -242,9 +242,6 @@ importers:
 
   packages/git:
     dependencies:
-      '@orzeus/core':
-        specifier: workspace:*
-        version: link:../core
       '@orzeus/schema':
         specifier: workspace:*
         version: link:../schema
@@ -299,9 +296,33 @@ importers:
 
   services/engine:
     dependencies:
+      '@orzeus/checks':
+        specifier: workspace:*
+        version: link:../../packages/checks
+      '@orzeus/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@orzeus/git':
+        specifier: workspace:*
+        version: link:../../packages/git
       '@orzeus/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@orzeus/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
+      '@orzeus/schema':
+        specifier: workspace:*
+        version: link:../../packages/schema
+      '@orzeus/store':
+        specifier: workspace:*
+        version: link:../../packages/store
+      '@orzeus/trace':
+        specifier: workspace:*
+        version: link:../../packages/trace
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
 
   services/memory-server: {}
 

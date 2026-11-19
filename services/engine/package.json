@@ -5,7 +5,8 @@
   "type": "module",
   "description": "orzeusd: the Orzeus orchestration engine. Composition root that wires core ports to concrete adapters and serves @orzeus/protocol over stdio.",
   "bin": {
-    "orzeusd": "./dist/main.js"
+    "orzeusd": "./dist/main.js",
+    "orzeus": "./dist/cli.js"
   },
   "exports": {
     ".": {
@@ -21,6 +22,14 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@orzeus/protocol": "workspace:*"
+    "@orzeus/checks": "workspace:*",
+    "@orzeus/core": "workspace:*",
+    "@orzeus/git": "workspace:*",
+    "@orzeus/protocol": "workspace:*",
+    "@orzeus/providers": "workspace:*",
+    "@orzeus/schema": "workspace:*",
+    "@orzeus/store": "workspace:*",
+    "@orzeus/trace": "workspace:*",
+    "zod": "4.6.7"
   }
 }
