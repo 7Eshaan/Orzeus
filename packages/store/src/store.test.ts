@@ -13,6 +13,7 @@ import {
 import type { NodeId, RunId } from "@orzeus/schema";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { BlobStore } from "./blobs.js";
 import { type Db, openDatabase } from "./db.js";
 import { openStore } from "./index.js";
 import { MigrationError, migrate } from "./migrate.js";
@@ -291,5 +292,16 @@ describe("Phase 1 exit check", () => {
       }),
       { numRuns: 60 },
     );
+  });
+});
+
+describe("blob redaction", () => {
+  it("redacts free-text blobs before storing them, and leaves packets alone", () => {
+    const redact = (text: string) => text.replaceAll("sk-secret", "[redacted]");
+    const blobs = new BlobStore(openStore(":memory:"), Date.now, redact);
+    const out = blobs.put("token sk-secret in output", "text/plain");
+    expect(new TextDecoder().decode(blobs.get(out)?.bytes)).toBe("token [redacted] in output");
+    const packet = blobs.put('{"note":"sk-secret"}', "application/vnd.orzeus.packet+json");
+    expect(new TextDecoder().decode(blobs.get(packet)?.bytes)).toContain("sk-secret");
   });
 });

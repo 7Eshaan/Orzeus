@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Git } from "@orzeus/git";
@@ -118,5 +118,23 @@ describe("describeTooling", () => {
     expect(describeTooling(dir)).toContain("no scripts");
     writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
     expect(describeTooling(dir)).toContain("test = node --test");
+  });
+});
+
+describe("symbolic links", () => {
+  it("never follows a link out of the repository", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "orzeus-outside-"));
+    writeFileSync(join(outside, "id_rsa"), "PRIVATE\n");
+    const repo = mkdtempSync(join(tmpdir(), "orzeus-linked-"));
+    await createFixtureRepo(repo, { "README.md": "# hi\n" });
+    symlinkSync(join(outside, "id_rsa"), join(repo, "key.txt"));
+    const map = renderRepoMap(await buildRepoMap(new Git(), repo));
+    expect(map).not.toContain("key.txt");
+    await expect(
+      resolveContextRef(
+        { kind: "file_range", path: "key.txt", startLine: 1, endLine: 1, why: "x" },
+        repo,
+      ),
+    ).rejects.toThrow(/symbolic link/);
   });
 });

@@ -10,3 +10,4 @@ Format: Context, Decision, Consequences, Status.
 | [0003](0003-os-keychain-for-secrets.md) | OS keychain instead of Stronghold for secrets                         | Accepted |
 | [0004](0004-event-log-is-the-trace.md)  | One hash-chained event log serves as both state store and audit trace | Accepted |
 | [0005](0005-tooling.md)                 | pnpm, TS 7 project references, Biome, Vitest                          | Accepted |
+| [0006](0006-updates.md)                 | No automatic updates in v1 (manual DMG installs)                      | Proposed |

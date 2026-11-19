@@ -12,6 +12,11 @@
       "@orzeus/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./main": {
+      "@orzeus/source": "./src/main.ts",
+      "types": "./dist/main.d.ts",
+      "default": "./dist/main.js"
     }
   },
   "files": [

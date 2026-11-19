@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { createRedactor } from "@orzeus/core";
 import { encodeLine } from "@orzeus/protocol";
 import { parseAcpAgents } from "./compose.js";
-import { createJsonLogger, describeError } from "./logger.js";
+import { createJsonLogger, describeError, secretValues } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
 import { EngineService } from "./service.js";
 import { serveStdio } from "./stdio.js";
@@ -14,8 +15,12 @@ import { ENGINE_VERSION } from "./version.js";
  * ORZEUS_ACP_AGENTS (JSON), ORZEUS_PLANNER, ORZEUS_WORKER, and API keys read from the macOS
  * Keychain (ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, CURSOR_API_KEY).
  */
-const logger = createJsonLogger((line) => process.stderr.write(line));
 const env = process.env;
+const logger = createJsonLogger(
+  (line) => process.stderr.write(line),
+  Date.now,
+  createRedactor(secretValues(env)),
+);
 
 const service = new EngineService({
   dataDir: env["ORZEUS_DATA_DIR"] ?? defaultDataDir(),

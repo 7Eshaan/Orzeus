@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { isSea } from "node:sea";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { type Clock, quotaHold, type Random, type RunState } from "@orzeus/core";
+import { type Clock, createRedactor, quotaHold, type Random, type RunState } from "@orzeus/core";
 import { Git, WorktreeManager } from "@orzeus/git";
 import { describeUpstream, McpGateway } from "@orzeus/mcp-gateway";
 import { MemoryStore } from "@orzeus/memory-server";
@@ -23,7 +24,7 @@ import {
 } from "@orzeus/providers";
 import { type AccountId, DEFAULT_POLICY, type ModelRef, type PolicyDocument } from "@orzeus/schema";
 import { type Db, McpServers, openStore, RunLocks, SqliteRunStore, Telemetry } from "@orzeus/store";
-import type { Logger } from "./logger.js";
+import { type Logger, secretValues } from "./logger.js";
 import { McpServerRegistry } from "./mcp-servers.js";
 import {
   type FrontierModel,
@@ -179,7 +180,8 @@ export function defaultAdapters(config: EngineConfig): AdapterRegistry {
         : account("cursor-cli-login", "Cursor (your login)", cursor, env),
     );
   }
-  if (env["ANTHROPIC_API_KEY"]) {
+  // The packaged engine leaves the Agent SDK out (its native binary is 160 MB per platform).
+  if (env["ANTHROPIC_API_KEY"] && !isSea()) {
     const claude = new ClaudeAgentSdkAdapter({
       stateDir: config.dataDir,
       clientVersion: ENGINE_VERSION,
@@ -262,11 +264,16 @@ export function parseModelSpec(spec: string): { adapter: string; model: string }
   return { adapter: spec.slice(0, index), model: spec.slice(index + 1) };
 }
 
-/** Path to the built orzeus-memory entry point (always dist, even when tests resolve sources). */
-function memoryServerMain(): string {
+/**
+ * How to start orzeus-memory: the packaged engine runs itself with the "memory-server" role (see
+ * sea.ts); otherwise Node runs the built entry point (always dist, even when tests resolve
+ * sources).
+ */
+function memoryServerArgs(): string[] {
+  if (isSea()) return ["memory-server"];
   let dir = dirname(createRequire(import.meta.url).resolve("@orzeus/memory-server"));
   while (!existsSync(join(dir, "package.json")) && dirname(dir) !== dir) dir = dirname(dir);
-  return join(dir, "dist", "main.js");
+  return [join(dir, "dist", "main.js")];
 }
 
 /**
@@ -283,7 +290,7 @@ async function openGateway(
   await client.connect(
     new StdioClientTransport({
       command: process.execPath,
-      args: [memoryServerMain(), "--db", join(dataDir, "memory.db"), "--repo", state.repo.root],
+      args: [...memoryServerArgs(), "--db", join(dataDir, "memory.db"), "--repo", state.repo.root],
     }),
   );
   return McpGateway.start({
@@ -319,7 +326,9 @@ export function headlessGate(
 export function createEngine(config: EngineConfig): Engine {
   mkdirSync(config.dataDir, { recursive: true });
   const db = openStore(join(config.dataDir, "orzeus.db"));
-  const store = new SqliteRunStore(db);
+  const store = new SqliteRunStore(db, {
+    redact: createRedactor(secretValues(config.env ?? process.env)),
+  });
   const memory = new MemoryStore(join(config.dataDir, "memory.db"));
   const mcpServers = new McpServerRegistry(new McpServers(db), config.env ?? process.env);
   const telemetry = new Telemetry(db);

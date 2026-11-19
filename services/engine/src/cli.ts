@@ -3,13 +3,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import type { RunState } from "@orzeus/core";
+import { createRedactor, type RunState } from "@orzeus/core";
 import { MEMORY_KINDS, type MemoryKind } from "@orzeus/memory-server";
 import type { CheckpointId, PlannerOutput, RunId } from "@orzeus/schema";
 import { exportJsonl } from "@orzeus/trace";
 import { createEngine, type Engine, headlessGate, parseAcpAgents } from "./compose.js";
 import { ulid } from "./ids.js";
-import { createJsonLogger } from "./logger.js";
+import { createJsonLogger, secretValues } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
 import { withGrants } from "./plan-edit.js";
 import { expandHandPlan, PlanFileError } from "./plan-file.js";
@@ -148,6 +148,7 @@ async function main(argv: readonly string[]): Promise<number> {
     (values.planner !== undefined || values.goal !== undefined || hasAnthropic
       ? plannerSpec
       : undefined);
+  const redactLine = createRedactor(secretValues(process.env));
   const flags = { approveAsks: values["approve-asks"], approveMerge: values["approve-merge"] };
   const engine = createEngine({
     ...flags,
@@ -160,9 +161,13 @@ async function main(argv: readonly string[]): Promise<number> {
       return { approved, actor: { kind: "human" } };
     },
     dataDir: values["data-dir"] ?? defaultDataDir(),
-    logger: createJsonLogger((line) => {
-      if (values.verbose) process.stderr.write(line);
-    }),
+    logger: createJsonLogger(
+      (line) => {
+        if (values.verbose) process.stderr.write(line);
+      },
+      Date.now,
+      createRedactor(secretValues(process.env)),
+    ),
     enableCodex: values["enable-codex"],
     enableCursor: values["enable-cursor"],
     acpAgents: parseAcpAgents(values.acp),
@@ -171,7 +176,7 @@ async function main(argv: readonly string[]): Promise<number> {
     ...(values["local-reasoning"] === undefined
       ? {}
       : { localReasoningEffort: reasoningEffort(values["local-reasoning"]) }),
-    progress: say,
+    progress: (line) => say(redactLine(line)),
   });
 
   try {

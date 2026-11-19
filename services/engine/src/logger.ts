@@ -11,12 +11,23 @@ export interface Logger {
 export function createJsonLogger(
   write: (line: string) => void,
   now: () => number = Date.now,
+  redact: (text: string) => string = (t) => t,
 ): Logger {
   return {
     log(level, message, fields = {}) {
-      write(`${JSON.stringify({ ts: now(), level, msg: message, ...fields })}\n`);
+      write(`${redact(JSON.stringify({ ts: now(), level, msg: message, ...fields }))}\n`);
     },
   };
+}
+
+/** Environment variables that hold secrets Orzeus knows about (API keys, MCP server secrets). */
+export function secretValues(env: Readonly<Record<string, string | undefined>>): string[] {
+  return Object.entries(env)
+    .filter(
+      ([key]) =>
+        /_API_KEY$/.test(key) || key.startsWith("ORZEUS_MCP_SECRET_") || /_TOKEN$/.test(key),
+    )
+    .flatMap(([, value]) => (value ? [value] : []));
 }
 
 export function describeError(error: unknown): Record<string, unknown> {

@@ -38,8 +38,12 @@ engine.on("exit", (code) => {
 createServer((req, res) => {
   res.setHeader("access-control-allow-origin", ORIGIN);
   res.setHeader("access-control-allow-headers", "content-type");
+  // The Vite page is the only client: its requests always carry its Origin (cross-origin to
+  // this port). Requiring it, plus a loopback Host, also stops DNS-rebinding pages, whose
+  // same-origin requests would carry no Origin or a foreign Host.
   const origin = req.headers.origin;
-  if (origin !== undefined && origin !== ORIGIN) {
+  const host = req.headers.host ?? "";
+  if (origin !== ORIGIN || !/^(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host)) {
     res.writeHead(403).end();
     return;
   }

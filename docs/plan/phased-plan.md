@@ -285,6 +285,51 @@ security review (secrets, redaction, policy bypass attempts), performance pass, 
 
 **Commit point 9:** `chore: release packaging and hardening`.
 
+### Phase 7 notes
+
+Status: **done** (2026-11-19), except the first real single-executable build and anything that
+needs Ryu's Apple account (see below).
+
+- **Packaging.** `services/engine/src/sea.ts` is one entry for three roles (sidecar,
+  `memory-server`, `cli`). `tooling/scripts/build-sidecar.ts` bundles it with esbuild 0.28.2
+  into one ES module, embeds the tree-sitter wasm files as SEA assets (`setWasmSource` in
+  `@orzeus/context`), and runs `node --build-sea` (Node 26, `mainFormat: "module"`). The engine
+  starts the memory server by running itself. Release builds of the app run the bundled
+  `orzeusd` sidecar (`tauri.bundle.conf.json`: externalBin, hardened runtime, JIT entitlements);
+  debug builds keep running the repository's engine with Node. The bundle was smoke-tested
+  under Node in all three roles. Homebrew's Node lacks the SEA fuse, so the script downloads the
+  official build once (verified against SHASUMS256); Ryu approved that download, but this
+  session's sandbox blocked it, so the first `pnpm build:sidecar` is Ryu's to run.
+- **Left out of the packaged engine:** the Claude Agent SDK (160 MB native binary per platform).
+- **Signing and notarization:** configuration and a step-by-step guide
+  (docs/guide/release-macos.md); not run, since it needs Ryu's Developer ID and Apple account.
+- **Updates:** ADR 0006 proposes no automatic updates in v1.
+- **Security review, fixed:**
+  - Secrets are redacted (known key values from the environment, common key formats, bearer
+    tokens, private key blocks) in engine logs, progress lines, and free-text blobs (command
+    output, diffs, tool-call bodies) before they are stored. Packets are not redacted: their
+    hash is part of the trace and Orzeus writes them.
+  - Symbolic links: worker file tools and the ACP client resolve real paths and refuse anything
+    that leads outside the worktree; the repo map never follows links (a committed link to
+    `~/.ssh/id_rsa` would otherwise have reached the planner); context reads refuse links out;
+    and the scope guard fails any attempt that creates a symlink or submodule.
+  - The dev bridge requires the Vite origin and a loopback Host on every request, which also
+    stops DNS-rebinding pages (their same-origin requests carry no Origin).
+  - Reviewed and unchanged: the webview has no shell or filesystem permissions (only the engine
+    relay and Keychain commands), the CSP allows only the app itself, gateway tokens are
+    192-bit and per node attempt on a loopback port, commands never go through a shell, and
+    shell operators make a command an "ask" rather than an allowlist match.
+- **Performance:** event reads are filtered in SQL. On a 10,000-event run
+  (`node tooling/scripts/bench-store.ts`): reading the whole run 359 ms, reading the last 50
+  events 1.8 ms (what the UI polls), one event type 0.8 ms, appending 0.08 ms per event, cached
+  state 0 ms. The orchestrator's packet and steering lookups, plan-approval check and the UI's
+  `runs.events` now use the filtered reads instead of parsing the whole run.
+- **Found while repeating the test suite:** two nodes preparing worktrees at once could race
+  (`git worktree prune` from one dropping the other's half-made `worktree add`); worktree
+  changes are now serialized per repository. A node that failed before its first dispatch also
+  recorded an invalid attempt number; fixed.
+- **Docs:** the user guide (docs/guide/README.md) and the release guide.
+
 ## Open decisions for Ryu
 
 1. **Engine as a Node sidecar** (ADR 0001). Recommended.

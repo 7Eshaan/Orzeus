@@ -13,20 +13,41 @@ export interface StoredBlob {
 }
 
 /**
+ * Media types that hold free text from the outside world (command output, diffs, tool-call
+ * bodies) and are redacted before storage. Packets are not: their content hash is part of the
+ * trace, and they are written by Orzeus from the plan.
+ */
+const REDACTED_TYPES = new Set([
+  "text/plain",
+  "text/x-diff",
+  "application/vnd.orzeus.tool-call+json",
+]);
+
+/**
  * Content-addressed, immutable storage for packets, diffs, prompts and check output. The hash is
- * over the uncompressed bytes, so it is what the trace chain refers to.
+ * over the uncompressed bytes as stored (after redaction), so it is what the trace chain refers to.
  */
 export class BlobStore {
   readonly #db: Db;
   readonly #now: () => number;
+  readonly #redact: (text: string) => string;
 
-  constructor(db: Db, now: () => number = Date.now) {
+  constructor(db: Db, now: () => number = Date.now, redact: (text: string) => string = (t) => t) {
     this.#db = db;
     this.#now = now;
+    this.#redact = redact;
   }
 
   put(content: Uint8Array | string, mediaType: string): Sha256 {
-    const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+    const text =
+      REDACTED_TYPES.has(mediaType) &&
+      this.#redact(typeof content === "string" ? content : new TextDecoder().decode(content));
+    const bytes =
+      text !== false
+        ? new TextEncoder().encode(text)
+        : typeof content === "string"
+          ? new TextEncoder().encode(content)
+          : content;
     const hash = sha256Bytes(bytes);
     if (this.has(hash)) return hash;
     const compress = bytes.byteLength > COMPRESS_ABOVE_BYTES;

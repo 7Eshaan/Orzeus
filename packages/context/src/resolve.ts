@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { join, sep } from "node:path";
 import { normalizeRelativePath } from "@orzeus/core";
 import type { ContextRef } from "@orzeus/schema";
 import { languageOf } from "./languages.js";
@@ -33,7 +33,18 @@ export async function resolveContextRef(
   }
   const path = normalizeRelativePath(ref.path);
   if (path === null) throw new ContextResolutionError(`${ref.path} is outside the repository`);
-  const text = await readFile(join(worktree, path), "utf8").catch(() => {
+  const full = join(worktree, path);
+  const [real, root] = await Promise.all([
+    realpath(full).catch(() => {
+      throw new ContextResolutionError(`${path} does not exist in this worktree`);
+    }),
+    realpath(worktree),
+  ]);
+  if (real !== root && !real.startsWith(`${root}${sep}`))
+    throw new ContextResolutionError(
+      `${path} leads outside the repository through a symbolic link`,
+    );
+  const text = await readFile(real, "utf8").catch(() => {
     throw new ContextResolutionError(`${path} does not exist in this worktree`);
   });
   const lines = text.split("\n");

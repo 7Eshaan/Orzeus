@@ -1,6 +1,9 @@
 # Orzeus documentation
 
-Start with the [architecture overview](architecture/00-overview.md), then the
+Using Orzeus: the [user guide](guide/README.md) and
+[building, signing and notarizing the app](guide/release-macos.md).
+
+Building Orzeus: start with the [architecture overview](architecture/00-overview.md), then the
 [phased plan](plan/phased-plan.md).
 
 - Architecture

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
   client as acpClient,
@@ -24,7 +24,7 @@ import type {
   SessionRequest,
 } from "../../adapter.js";
 import { cliEnv } from "../../jsonl-process.js";
-import { hostOf, insideWorktree } from "../../paths.js";
+import { hostOf, insideWorktree, safeWorktreePath } from "../../paths.js";
 import { estimateTokens } from "../../quota.js";
 import { SessionController } from "../../session.js";
 import { shellWords } from "../../shell-words.js";
@@ -299,7 +299,7 @@ export class AcpAdapter implements ProviderAdapter {
       .onRequest(methods.client.fs.readTextFile, async ({ params }) => {
         const rel = insideWorktree(worktree, params.path);
         if (rel === null) throw new Error(`${params.path} is outside the repository`);
-        const content = await readFile(join(worktree, rel), "utf8");
+        const content = await readFile(await safeWorktreePath(worktree, rel), "utf8");
         if (params.line == null && params.limit == null) return { content };
         const lines = content.split("\n");
         const start = Math.max(0, (params.line ?? 1) - 1);
@@ -320,7 +320,7 @@ export class AcpAdapter implements ProviderAdapter {
           if (decision.kind !== "allow_once" && decision.kind !== "allow_for_node")
             throw new Error(`Not allowed to write ${rel}`);
         }
-        const full = join(worktree, rel);
+        const full = await safeWorktreePath(worktree, rel);
         let existed = true;
         await readFile(full).catch(() => {
           existed = false;

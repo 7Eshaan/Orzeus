@@ -30,6 +30,11 @@ export interface ChangedFile {
 export interface Diff {
   readonly patch: string;
   readonly files: readonly ChangedFile[];
+  /**
+   * Paths the head turns into a symbolic link (mode 120000) or a submodule (160000): entries
+   * that can point outside the repository, so workers may not create them.
+   */
+  readonly links: readonly string[];
   readonly insertions: number;
   readonly deletions: number;
 }
@@ -161,11 +166,19 @@ export class Git {
   }
 
   async diff(cwd: string, base: GitOid, head: GitOid): Promise<Diff> {
-    const [patch, numstat, nameStatus] = await Promise.all([
+    const [patch, numstat, nameStatus, raw] = await Promise.all([
       this.run(cwd, ["diff", "--no-color", "--no-ext-diff", "--binary", base, head]),
       this.run(cwd, ["diff", "--numstat", "-z", "--no-renames", base, head]),
       this.run(cwd, ["diff", "--name-status", "-z", "--no-renames", base, head]),
+      this.run(cwd, ["diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head]),
     ]);
+    // --raw -z: ":<old mode> <new mode> <old oid> <new oid> <status>\0<path>\0" per file.
+    const links: string[] = [];
+    const rawParts = raw.split("\0");
+    for (let i = 0; i + 1 < rawParts.length; i += 2) {
+      const newMode = (rawParts[i] ?? "").split(" ")[1];
+      if (newMode === "120000" || newMode === "160000") links.push(rawParts[i + 1] ?? "");
+    }
 
     const statuses = new Map<string, ChangedFile["status"]>();
     const ns = nameStatus.split("\0");
@@ -193,6 +206,7 @@ export class Git {
     return {
       patch,
       files,
+      links,
       insertions: files.reduce((sum, f) => sum + (f.insertions ?? 0), 0),
       deletions: files.reduce((sum, f) => sum + (f.deletions ?? 0), 0),
     };

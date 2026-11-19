@@ -19,3 +19,6 @@ apps/desktop/src-tauri/gen/schemas/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Single-executable build output (tooling/scripts/build-sidecar.ts)
+services/engine/dist-sea/

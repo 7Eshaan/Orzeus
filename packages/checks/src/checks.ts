@@ -18,6 +18,8 @@ export interface CheckContext {
   /** Paths changed by the attempt, relative to the worktree. */
   readonly changedPaths: readonly string[];
   readonly writeScope: readonly string[];
+  /** Changed paths that became symbolic links or submodules; the scope guard refuses them. */
+  readonly links?: readonly string[];
   /** Extra environment for commands, on top of a minimal safe base. */
   readonly env?: Readonly<Record<string, string>>;
   readonly maxOutputChars?: number;
@@ -50,15 +52,28 @@ export async function runCheck(check: CheckSpec, context: CheckContext): Promise
   switch (check.kind) {
     case "scope_guard": {
       const outside = outOfScope(context.changedPaths, context.writeScope);
+      const links = context.links ?? [];
+      const problems = [
+        ...(outside.length === 0
+          ? []
+          : [
+              `Changed outside the write scope (${context.writeScope.join(", ") || "read-only"}):\n${outside.map((p) => `  ${p}`).join("\n")}`,
+            ]),
+        ...(links.length === 0
+          ? []
+          : [
+              `Created symbolic links or submodules, which could point outside the repository:\n${links.map((p) => `  ${p}`).join("\n")}`,
+            ]),
+      ];
       return {
         ...base,
-        passed: outside.length === 0,
+        passed: problems.length === 0,
         exitCode: null,
         durationMs: 0,
         output:
-          outside.length === 0
+          problems.length === 0
             ? `All ${context.changedPaths.length} changed files are inside the write scope.`
-            : `Changed outside the write scope (${context.writeScope.join(", ") || "read-only"}):\n${outside.map((p) => `  ${p}`).join("\n")}`,
+            : problems.join("\n"),
       };
     }
     case "json_schema":

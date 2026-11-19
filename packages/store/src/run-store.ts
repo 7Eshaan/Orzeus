@@ -15,7 +15,7 @@ import {
 } from "@orzeus/schema";
 import { type ChainVerification, type HashFn, sealEvent, verifyChain } from "@orzeus/trace";
 import { BlobStore } from "./blobs.js";
-import type { Db } from "./db.js";
+import type { Db, SqlValue } from "./db.js";
 import { sha256Text } from "./hash.js";
 import { clearProjections, projectEvent } from "./projections.js";
 
@@ -82,10 +82,17 @@ export class SqliteRunStore implements RunEventStore {
 
   readonly #listeners = new Set<(runId: RunId, state: RunState) => void>();
 
-  constructor(db: Db, options: { readonly hash?: HashFn } = {}) {
+  constructor(
+    db: Db,
+    options: {
+      readonly hash?: HashFn;
+      /** Applied to free-text blobs (output, diffs, tool calls) before they are stored. */
+      readonly redact?: (text: string) => string;
+    } = {},
+  ) {
     this.#db = db;
     this.#hash = options.hash ?? sha256Text;
-    this.blobs = new BlobStore(db);
+    this.blobs = new BlobStore(db, Date.now, options.redact);
   }
 
   /** Called after every committed append (for live UI updates). Returns an unsubscribe function. */
@@ -152,9 +159,40 @@ export class SqliteRunStore implements RunEventStore {
     return result.value;
   }
 
-  events(runId: RunId): TraceEvent[] {
+  /**
+   * The run's events in order. Filters run in SQL (indexes events_by_type and events_by_node),
+   * so callers that need a few events do not parse a whole long run.
+   */
+  events(
+    runId: RunId,
+    filter: {
+      readonly afterSeq?: number;
+      readonly limit?: number;
+      readonly types?: readonly string[];
+      readonly nodeId?: string;
+    } = {},
+  ): TraceEvent[] {
+    const where = ["run_id = ?"];
+    const params: SqlValue[] = [runId];
+    if (filter.afterSeq !== undefined) {
+      where.push("seq > ?");
+      params.push(filter.afterSeq);
+    }
+    if (filter.types !== undefined && filter.types.length > 0) {
+      where.push(`type IN (${filter.types.map(() => "?").join(", ")})`);
+      params.push(...filter.types);
+    }
+    if (filter.nodeId !== undefined) {
+      where.push("node_id = ?");
+      params.push(filter.nodeId);
+    }
+    const limit =
+      filter.limit === undefined ? "" : ` LIMIT ${Math.max(0, Math.floor(filter.limit))}`;
     return this.#db
-      .all<EventRow>("SELECT * FROM events WHERE run_id = ? ORDER BY seq", [runId])
+      .all<EventRow>(
+        `SELECT * FROM events WHERE ${where.join(" AND ")} ORDER BY seq${limit}`,
+        params,
+      )
       .map((row) => {
         const parsed = parseTraceEvent({
           v: 1,

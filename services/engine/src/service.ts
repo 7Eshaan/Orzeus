@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { RunState } from "@orzeus/core";
+import { createRedactor, type RunState } from "@orzeus/core";
 import { MEMORY_KINDS } from "@orzeus/memory-server";
 import {
   type MethodResult,
@@ -15,7 +15,7 @@ import { exportJsonl, exportOtlp } from "@orzeus/trace";
 import { createEngine, type Engine, type EngineConfig } from "./compose.js";
 import { createHandlers, type EngineInfo } from "./handlers.js";
 import { ulid } from "./ids.js";
-import type { Logger } from "./logger.js";
+import { type Logger, secretValues } from "./logger.js";
 import type { GateAnswer, GateRequest } from "./orchestrator.js";
 import { checkCommandsExist } from "./plan-checks.js";
 import { applyPlanEdit, toPlanEdit, withGrants } from "./plan-edit.js";
@@ -89,6 +89,7 @@ export class EngineService {
         : env["GEMINI_API_KEY"]
           ? null
           : LOCAL_MODEL);
+    const redact = createRedactor(secretValues(env));
     this.engine = createEngine({
       dataDir: options.dataDir,
       logger: options.logger,
@@ -99,7 +100,8 @@ export class EngineService {
       ...(options.ollamaUrl === undefined ? {} : { openAiCompatibleUrl: options.ollamaUrl }),
       ...(this.#planner === null ? {} : { frontier: this.#planner }),
       decideGate: (gate) => this.#ask(gate),
-      progress: (line) => options.notify("progress" satisfies NotificationName, { line }),
+      progress: (line) =>
+        options.notify("progress" satisfies NotificationName, { line: redact(line) }),
       ...options.engineOverrides,
     });
     this.engine.store.onAppend((runId, state) =>
@@ -230,10 +232,7 @@ export class EngineService {
       "runs.list": () => engine.store.runIds().map((id) => summarize(this.#state(id))),
       "runs.get": ({ runId }) => this.#detail(this.#state(runId as RunId)),
       "runs.events": ({ runId, afterSeq, limit }) =>
-        engine.store
-          .events(runId as RunId)
-          .filter((e) => e.seq > (afterSeq ?? 0))
-          .slice(0, limit ?? 2_000),
+        engine.store.events(runId as RunId, { afterSeq: afterSeq ?? 0, limit: limit ?? 2_000 }),
       "runs.start": async ({ goal, repo, baseRef, planner, worker }) => {
         const prepared = await prepareRepo(engine, repo, baseRef ?? "HEAD");
         const plannerSpec = planner ?? this.#planner;

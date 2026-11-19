@@ -17,6 +17,8 @@ export interface WorktreeHandle {
 export class WorktreeManager {
   readonly #git: Git;
   readonly #root: string;
+  /** Per repository: worktree changes run one at a time (see prepare). */
+  readonly #queues = new Map<string, Promise<unknown>>();
 
   constructor(git: Git, root: string) {
     this.#git = git;
@@ -35,7 +37,12 @@ export class WorktreeManager {
     return `orzeus/${runId}/${nodeId}`;
   }
 
-  /** Creates the node's worktree at `base`, or resets an existing one to `base`. */
+  /**
+   * Creates the node's worktree at `base`, or resets an existing one to `base`. Calls for the
+   * same repository are serialized: `git worktree prune` from one node must not run while
+   * another node's `git worktree add` is half done (prune would drop its registration), and git
+   * itself locks shared files during these commands.
+   */
   async prepare(
     repo: string,
     runId: string,
@@ -45,19 +52,35 @@ export class WorktreeManager {
     const path = this.pathFor(runId, nodeId);
     const branch = WorktreeManager.branchFor(runId, nodeId);
     this.#assertOwned(path);
-    if (existsSync(path)) {
-      await this.#git.hardReset(path, base);
-    } else {
-      await mkdir(join(this.#root, runId), { recursive: true });
-      await this.#git.pruneWorktrees(repo);
-      await this.#git.addWorktree(repo, path, branch, base);
-    }
-    return { path, branch };
+    return this.#serial(repo, async () => {
+      if (existsSync(path)) {
+        await this.#git.hardReset(path, base);
+      } else {
+        await mkdir(join(this.#root, runId), { recursive: true });
+        await this.#git.pruneWorktrees(repo);
+        await this.#git.addWorktree(repo, path, branch, base);
+      }
+      return { path, branch };
+    });
   }
 
   async remove(repo: string, path: string): Promise<void> {
     this.#assertOwned(path);
-    if (existsSync(path)) await this.#git.removeWorktree(repo, path);
+    return this.#serial(repo, async () => {
+      if (existsSync(path)) await this.#git.removeWorktree(repo, path);
+    });
+  }
+
+  #serial<T>(repo: string, work: () => Promise<T>): Promise<T> {
+    const key = resolve(repo);
+    const previous = this.#queues.get(key) ?? Promise.resolve();
+    const next = previous.then(work, work);
+    const settled = next.catch(() => undefined);
+    this.#queues.set(key, settled);
+    void settled.then(() => {
+      if (this.#queues.get(key) === settled) this.#queues.delete(key);
+    });
+    return next;
   }
 
   #assertOwned(path: string): void {

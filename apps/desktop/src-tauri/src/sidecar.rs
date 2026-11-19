@@ -66,26 +66,34 @@ impl EngineHandle {
     }
 }
 
-/// How to launch the engine. Overridable for development and tests:
-/// `ORZEUS_NODE` (default `node`) and `ORZEUS_ENGINE_ENTRY` (default: the built engine in this
-/// repository). Production packaging as a single-executable sidecar comes in Phase 7.
-struct LaunchSpec {
-    program: String,
-    args: Vec<String>,
+/// How to launch the engine.
+///
+/// Release builds run the bundled single executable (`binaries/orzeusd-<target>`, built by
+/// `tooling/scripts/build-sidecar.ts` and declared in `tauri.bundle.conf.json`). Debug builds run
+/// the engine from this repository with Node: `ORZEUS_NODE` (default `node`) and
+/// `ORZEUS_ENGINE_ENTRY` (default: the built engine). Setting either variable forces Node in
+/// release builds too, which helps when debugging a packaged app.
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchSpec {
+    Node { program: String, args: Vec<String> },
+    Bundled,
 }
 
 fn launch_spec() -> LaunchSpec {
-    let program = std::env::var("ORZEUS_NODE").unwrap_or_else(|_| "node".to_owned());
-    let entry = std::env::var("ORZEUS_ENGINE_ENTRY").unwrap_or_else(|_| {
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../services/engine/dist/main.js"
-        )
-        .to_owned()
-    });
-    LaunchSpec {
-        program,
-        args: vec![entry],
+    let node = std::env::var("ORZEUS_NODE").ok();
+    let entry = std::env::var("ORZEUS_ENGINE_ENTRY").ok();
+    if !cfg!(debug_assertions) && node.is_none() && entry.is_none() {
+        return LaunchSpec::Bundled;
+    }
+    LaunchSpec::Node {
+        program: node.unwrap_or_else(|| "node".to_owned()),
+        args: vec![entry.unwrap_or_else(|| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../services/engine/dist/main.js"
+            )
+            .to_owned()
+        })],
     }
 }
 
@@ -139,14 +147,19 @@ fn restart_delay(previous_starts: usize) -> Option<Duration> {
 
 /// Runs the engine until it exits. Returns its exit code.
 async fn run_once(app: &AppHandle) -> Result<Option<i32>, String> {
-    let spec = launch_spec();
-    let (mut events, child) = app
-        .shell()
-        .command(&spec.program)
-        .args(&spec.args)
+    let (command, label) = match launch_spec() {
+        LaunchSpec::Node { program, args } => (app.shell().command(&program).args(&args), program),
+        LaunchSpec::Bundled => (
+            app.shell()
+                .sidecar("orzeusd")
+                .map_err(|error| format!("the bundled engine is missing: {error}"))?,
+            "orzeusd".to_owned(),
+        ),
+    };
+    let (mut events, child) = command
         .envs(crate::secrets::engine_env())
         .spawn()
-        .map_err(|error| format!("failed to start engine with `{}`: {error}", spec.program))?;
+        .map_err(|error| format!("failed to start engine with `{label}`: {error}"))?;
 
     let pid = child.pid();
     app.state::<EngineHandle>().set_child(Some(child));
@@ -248,6 +261,18 @@ mod tests {
         assert_eq!(restart_delay(1), Some(Duration::from_millis(250)));
         assert_eq!(restart_delay(2), Some(Duration::from_millis(500)));
         assert_eq!(restart_delay(100), Some(Duration::from_secs(16)));
+    }
+
+    #[test]
+    fn debug_builds_run_the_engine_with_node() {
+        // Tests are debug builds, so the repository's engine is used unless overridden.
+        if std::env::var("ORZEUS_NODE").is_err() && std::env::var("ORZEUS_ENGINE_ENTRY").is_err() {
+            let LaunchSpec::Node { program, args } = launch_spec() else {
+                panic!("expected Node in a debug build");
+            };
+            assert_eq!(program, "node");
+            assert!(args[0].ends_with("services/engine/dist/main.js"));
+        }
     }
 
     #[test]

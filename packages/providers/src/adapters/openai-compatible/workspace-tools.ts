@@ -1,7 +1,8 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { normalizeRelativePath } from "@orzeus/core";
 import type { ToolAllowlist } from "@orzeus/schema";
+import { safeWorktreePath } from "../../paths.js";
 
 /** JSON-schema tool definitions in the OpenAI chat-completions format. */
 export interface ToolDefinition {
@@ -94,7 +95,9 @@ const SKIP_DIRS = new Set([".git", "node_modules", "dist", "target"]);
 export async function listFiles(worktree: string, relativeDir: string): Promise<string> {
   const results: string[] = [];
   const walk = async (dir: string): Promise<void> => {
-    for (const entry of await readdir(join(worktree, dir), { withFileTypes: true })) {
+    for (const entry of await readdir(await safeWorktreePath(worktree, dir || "."), {
+      withFileTypes: true,
+    })) {
       if (results.length >= 500) return;
       const path = dir === "" ? entry.name : `${dir}/${entry.name}`;
       if (entry.isDirectory()) {
@@ -114,7 +117,7 @@ export async function readText(
   start?: number,
   end?: number,
 ): Promise<string> {
-  const absolute = join(worktree, path);
+  const absolute = await safeWorktreePath(worktree, path);
   if ((await stat(absolute)).size > MAX_READ_CHARS * 4)
     return `${path} is too large to read whole; ask for a line range.`;
   const text = await readFile(absolute, "utf8");
@@ -124,11 +127,11 @@ export async function readText(
 }
 
 export async function writeText(worktree: string, path: string, content: string): Promise<void> {
-  const absolute = join(worktree, path);
+  const absolute = await safeWorktreePath(worktree, path);
   await mkdir(dirname(absolute), { recursive: true });
   await writeFile(absolute, content);
 }
 
 export async function deleteFile(worktree: string, path: string): Promise<void> {
-  await rm(join(worktree, path));
+  await rm(await safeWorktreePath(worktree, path));
 }

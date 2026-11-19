@@ -128,3 +128,16 @@ describe("runChecks", () => {
     ]);
   });
 });
+
+describe("scope guard and links", () => {
+  it("fails when the attempt created a symbolic link or submodule, even inside the scope", async () => {
+    const [result] = await runChecks([], {
+      worktree: process.cwd(),
+      changedPaths: ["src/link"],
+      writeScope: ["src/**"],
+      links: ["src/link"],
+    });
+    expect(result?.passed).toBe(false);
+    expect(result?.output).toMatch(/symbolic links or submodules/);
+  });
+});

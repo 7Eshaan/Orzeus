@@ -18,11 +18,14 @@
     "check": "pnpm lint && pnpm check:deps && pnpm typecheck && pnpm test && pnpm check:rust",
     "dev": "pnpm build && pnpm --filter @orzeus/desktop tauri dev",
     "clean": "tsc -b --clean",
-    "dev:web": "pnpm build && (node tooling/scripts/dev-bridge.ts & pnpm --filter @orzeus/desktop web:dev)"
+    "dev:web": "pnpm build && (node tooling/scripts/dev-bridge.ts & pnpm --filter @orzeus/desktop web:dev)",
+    "build:sidecar": "pnpm build && node tooling/scripts/build-sidecar.ts",
+    "package:app": "pnpm build:sidecar && pnpm --filter @orzeus/desktop tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
     "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
     "fast-check": "4.10.3",
     "typescript": "7.0.2",
     "vite": "8.3.8",

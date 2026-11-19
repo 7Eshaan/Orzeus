@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Git } from "@orzeus/git";
 import { type LanguageId, languageOf } from "./languages.js";
@@ -32,7 +32,9 @@ export async function buildRepoMap(git: Git, root: string): Promise<RepoMap> {
   const files: RepoFile[] = [];
   for (const path of paths) {
     const absolute = join(root, path);
-    const info = await stat(absolute).catch(() => null);
+    // lstat: a symbolic link (even one committed to the repository) is never followed, so the
+    // map cannot pull in files from outside the repository.
+    const info = await lstat(absolute).catch(() => null);
     if (info === null || !info.isFile()) continue;
     const language = languageOf(path);
     let symbols: CodeSymbol[] = [];

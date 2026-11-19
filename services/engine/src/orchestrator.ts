@@ -268,8 +268,7 @@ export class RunOrchestrator {
     const revision = state.proposedDag?.revision;
     if (revision === undefined) throw new Error("no plan is waiting for approval");
     edited ??=
-      this.#o.store.events(runId).findLast((e) => e.type === "plan.proposed")?.actor.kind ===
-      "human";
+      this.#o.store.events(runId, { types: ["plan.proposed"] }).at(-1)?.actor.kind === "human";
     this.#append(runId, [
       this.#draft(runId, "plan.approved", { revision, edited }, { actor: { kind: "human" } }),
       this.#checkpointDraft(runId, this.#state(runId), "plan approved"),
@@ -736,6 +735,7 @@ export class RunOrchestrator {
       worktree: worktree.path,
       changedPaths: changed,
       writeScope: task.writeScope,
+      links: diff.links,
     });
     this.#append(runId, this.#checkDrafts(runId, results, { nodeId, attempt }));
 
@@ -1182,7 +1182,7 @@ export class RunOrchestrator {
       return;
     }
     try {
-      const events = this.#o.store.events(runId);
+      const events = this.#o.store.events(runId, { nodeId });
       const last = <K extends TraceEventType>(type: K) =>
         events
           .filter(
@@ -1292,7 +1292,8 @@ export class RunOrchestrator {
         runId,
         "node.failed",
         { errorClass: errorClass.replace(/[^a-z0-9_.]/g, "_"), message },
-        { nodeId, attempt: node?.attempt ?? null },
+        // A node that failed before its first dispatch has no attempt yet.
+        { nodeId, attempt: node !== undefined && node.attempt >= 1 ? node.attempt : null },
       ),
     ]);
     this.#say(`${nodeId}: failed (${errorClass}): ${message.split("\n")[0] ?? ""}`);
@@ -1496,10 +1497,7 @@ export class RunOrchestrator {
 
   /** The node's latest issued packet (re-issued when steering rewrites the task). */
   #plannedPacket(runId: RunId, nodeId: NodeId): ContextPacket {
-    const issued = this.#o.store
-      .events(runId)
-      .filter((e) => e.type === "packet.issued" && e.nodeId === nodeId)
-      .at(-1);
+    const issued = this.#o.store.events(runId, { types: ["packet.issued"], nodeId }).at(-1);
     const blob =
       issued?.blobs[0] === undefined ? undefined : this.#o.store.blobs.get(issued.blobs[0]);
     if (blob === undefined) throw new Error(`no packet for ${nodeId}`);
@@ -1521,17 +1519,19 @@ export class RunOrchestrator {
         },
       ];
     });
-    const steering = this.#o.store.events(runId).flatMap((e) =>
-      e.type === "node.steered" && e.nodeId === task.id && e.actor.kind === "model"
-        ? [
-            {
-              attempt: Math.max(1, state.nodes[task.id]?.attempt ?? 1),
-              from: e.actor.model,
-              note: e.payload.note,
-            },
-          ]
-        : [],
-    );
+    const steering = this.#o.store
+      .events(runId, { types: ["node.steered"], nodeId: task.id })
+      .flatMap((e) =>
+        e.type === "node.steered" && e.nodeId === task.id && e.actor.kind === "model"
+          ? [
+              {
+                attempt: Math.max(1, state.nodes[task.id]?.attempt ?? 1),
+                from: e.actor.model,
+                note: e.payload.note,
+              },
+            ]
+          : [],
+      );
     const { contentHash: _old, ...body } = planned;
     return this.#sealPacket({ ...body, upstream, steering });
   }

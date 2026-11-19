@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GitOid } from "@orzeus/schema";
@@ -66,6 +66,17 @@ describe("Git", () => {
     // The user's own checkout and branch are untouched.
     expect(await git.revParse(repo, "main")).toBe(base);
     expect(await git.run(repo, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("lists symbolic links the attempt created, so the scope guard can refuse them", async () => {
+    const worktrees = new WorktreeManager(git, join(dir, "worktrees"));
+    const wt = await worktrees.prepare(repo, "RUN", "node-l", base);
+    symlinkSync("/etc", join(wt.path, "src/escape"));
+    writeFileSync(join(wt.path, "src/plain.ts"), "export {};\n");
+    const snap = await git.snapshot(wt.path, "links");
+    const diff = await git.diff(repo, base, snap.commit);
+    expect(diff.links).toEqual(["src/escape"]);
+    expect(diff.files.map((f) => f.path).sort()).toEqual(["src/escape", "src/plain.ts"]);
   });
 
   it("reports no change when nothing was edited", async () => {
