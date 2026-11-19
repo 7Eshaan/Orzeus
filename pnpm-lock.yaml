@@ -293,9 +293,6 @@ importers:
 
   packages/trace:
     dependencies:
-      '@orzeus/core':
-        specifier: workspace:*
-        version: link:../core
       '@orzeus/schema':
         specifier: workspace:*
         version: link:../schema

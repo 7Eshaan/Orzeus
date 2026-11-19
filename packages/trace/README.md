@@ -8,4 +8,6 @@ Pure apart from hashing, which is injected through a port.
 
 ## Status
 
-Skeleton (Phase 0). See [docs/plan/phased-plan.md](../../docs/plan/phased-plan.md) for when it gets built.
+Implemented in Phase 1.
+
+Entry points: `canonicalize` (RFC 8785), `sealEvent`, `verifyChain`, `contentHash`, `exportJsonl`. The SHA-256 function is passed in as a `HashFn`.

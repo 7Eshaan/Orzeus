@@ -1,5 +1,8 @@
 # Core schemas
 
+> **Implemented in Phase 1.** The Zod schemas in `packages/schema/src` are now the source of
+> truth. This page is the readable type-level view; where the two differ, the code wins.
+
 These are the type-level views of the four core contracts. In code, the source of truth will be
 **Zod 4 schemas in `@orzeus/schema`**, with these types produced by `z.infer`. Zod matters here
 because three of these shapes arrive from untrusted places (LLM planner output, provider
@@ -29,6 +32,7 @@ export type PacketId = Brand<string, "PacketId">;
 export type AccountId = Brand<string, "AccountId">;
 export type ApprovalId = Brand<string, "ApprovalId">;
 export type CheckpointId = Brand<string, "CheckpointId">;
+export type ProjectId = Brand<string, "ProjectId">;
 /** Lowercase hex SHA-256. Content address for blobs, packets and trace hashes. */
 export type Sha256 = Brand<string, "Sha256">;
 /** Git object id (SHA-1 or SHA-256 repos). */
@@ -618,17 +622,14 @@ export interface TraceEnvelope<K extends TraceEventType> {
   };
   /** null only for seq 1. */
   readonly prevHash: Sha256 | null;
-  /** sha256(prevHash ‖ JCS(envelope without `hash`)) */
+  /** sha256(JCS(envelope without `hash`)); the envelope includes prevHash, which chains it. */
   readonly hash: Sha256;
 }
 
 export interface TraceEventPayloads {
-  "run.created": { readonly goal: string; readonly repo: RepoRef };
-  "plan.proposed": {
-    readonly revision: number;
-    readonly dagBlob: Sha256;
-    readonly usage: TokenUsage;
-  };
+  "run.created": { readonly projectId: ProjectId; readonly goal: string; readonly repo: RepoRef };
+  /** The DAG is inline: it is small, and reducers must not need the blob store. */
+  "plan.proposed": { readonly revision: number; readonly dag: TaskDAG };
   "plan.approved": { readonly revision: number; readonly edited: boolean };
   "packet.issued": { readonly packetId: PacketId; readonly contentHash: Sha256 };
   "node.ready": Record<string, never>;
@@ -640,6 +641,7 @@ export interface TraceEventPayloads {
     readonly baseCommit: GitOid;
     readonly packetHash: Sha256;
   };
+  "node.verifying": Record<string, never>;
   "model.call": {
     readonly model: ModelRef;
     readonly tier: Tier;
@@ -696,7 +698,12 @@ export interface TraceEventPayloads {
     readonly observed: number;
   };
   "quota.observed": { readonly windows: readonly QuotaWindow[] };
-  "checkpoint.created": { readonly checkpointId: CheckpointId; readonly label: string };
+  "checkpoint.created": {
+    readonly checkpointId: CheckpointId;
+    readonly label: string;
+    /** Commit per node worktree, so a rollback restores code and state together. */
+    readonly refs: Readonly<Record<string, GitOid>>;
+  };
   "run.rolled_back": { readonly toCheckpoint: CheckpointId };
   "run.paused": { readonly reason: string };
   "run.resumed": { readonly afterCrash: boolean };

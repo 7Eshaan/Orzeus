@@ -5,7 +5,7 @@
     "@orzeus/schema": [],
     "@orzeus/core": ["@orzeus/schema"],
     "@orzeus/protocol": ["@orzeus/schema"],
-    "@orzeus/trace": ["@orzeus/schema", "@orzeus/core"],
+    "@orzeus/trace": ["@orzeus/schema"],
     "@orzeus/store": ["@orzeus/schema", "@orzeus/core", "@orzeus/trace"],
     "@orzeus/git": ["@orzeus/schema", "@orzeus/core"],
     "@orzeus/checks": ["@orzeus/schema", "@orzeus/core"],

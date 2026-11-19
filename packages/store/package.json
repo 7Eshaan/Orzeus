@@ -15,8 +15,8 @@
     "dist"
   ],
   "dependencies": {
-    "@orzeus/schema": "workspace:*",
     "@orzeus/core": "workspace:*",
+    "@orzeus/schema": "workspace:*",
     "@orzeus/trace": "workspace:*"
   }
 }

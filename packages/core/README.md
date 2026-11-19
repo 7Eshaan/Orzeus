@@ -8,4 +8,6 @@ Pure. No IO, no Node or DOM APIs. Deterministic: no clocks or randomness inside 
 
 ## Status
 
-Skeleton (Phase 0). See [docs/plan/phased-plan.md](../../docs/plan/phased-plan.md) for when it gets built.
+Implemented in Phase 1.
+
+Main entry points: `validatePlan`, `applyEvent` / `replay` (the state machine), `decideNext` (scheduler), `decideAfterFailure` / `backoffDelayMs`, `nodeBudgetTrips`, `evaluatePolicy`. Ports for side effects are in `src/ports.ts`. Test helpers (`buildDag`, `InMemoryRunLog`, `simulateRun`) are exported from `@orzeus/core/testing`.

@@ -14,9 +14,12 @@ stays usable on its own.
 - `STRICT` tables, integer unix-ms timestamps, integer micro-USD, JSON stored as `TEXT`
   validated by Zod on the way in and out (plus `json_valid` checks where cheap).
 - Large content goes to the content-addressed `blobs` table; events hold hashes.
-- Forward-only numbered migrations in `packages/store/migrations/NNNN_name.sql`, applied in a
-  transaction, recorded in `schema_migrations`, with a checksum so an edited migration is
-  detected.
+- Forward-only numbered migrations in `packages/store/src/migrations/NNNN_name.ts` (SQL kept
+  as TypeScript string modules so they ship inside the engine bundle), each applied in its own
+  transaction and recorded in `schema_migrations` with a checksum, so an edited migration is
+  detected. The runner creates `schema_migrations` itself.
+- Usage and quota tables exist from migration 1, but their projections arrive with telemetry in
+  Phase 6.
 
 ## Connection settings
 
@@ -32,16 +35,9 @@ PRAGMA wal_autocheckpoint = 1000;
 `PRAGMA integrity_check` runs on startup after an unclean shutdown, and `orzeus trace verify`
 runs on any run being resumed.
 
-## Migration 0001_init.sql
+## Migration 0001 (init)
 
 ```sql
-CREATE TABLE schema_migrations (
-  version     INTEGER PRIMARY KEY,
-  name        TEXT    NOT NULL,
-  checksum    TEXT    NOT NULL,
-  applied_at  INTEGER NOT NULL
-) STRICT;
-
 -- ───────────── Configuration ─────────────
 
 CREATE TABLE projects (
@@ -191,6 +187,9 @@ CREATE TABLE nodes (
   input_tokens  INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cost_micro_usd INTEGER NOT NULL DEFAULT 0,
+  last_error_class   TEXT,
+  last_error_message TEXT,
+  summary       TEXT,
   updated_seq   INTEGER NOT NULL,
   PRIMARY KEY (run_id, node_id)
 ) STRICT, WITHOUT ROWID;

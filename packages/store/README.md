@@ -8,4 +8,6 @@ The only package that talks to SQLite. Opens the database through a small Db por
 
 ## Status
 
-Skeleton (Phase 0). See [docs/plan/phased-plan.md](../../docs/plan/phased-plan.md) for when it gets built.
+Implemented in Phase 1.
+
+Entry points: `openStore(path)` (open + migrate), `SqliteRunStore` (append, load, events, verify, rebuildProjections), `BlobStore`. Migrations live in `src/migrations/` and must match `docs/architecture/03-sqlite-schema.md` (a test enforces it).

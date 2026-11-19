@@ -36,6 +36,11 @@ round-trip RPC.
 
 ## Phase 1: Domain core and event store (about 1 week)
 
+Status: **done** (2026-11-19). 85 TypeScript tests. A scripted 10-node run (with a transient
+error, a failed check and a steered escalation) completes through SQLite; a restarted store
+replays to the identical state, rebuilt projections are row-for-row identical, and a one-word
+edit to a stored event is caught by chain verification.
+
 - `@orzeus/schema`: Zod schemas for everything in
   [02-core-schemas.md](../architecture/02-core-schemas.md), with type-equality tests.
 - `@orzeus/core`: DAG validation, run/node reducers, scheduler decisions (pure: given state,

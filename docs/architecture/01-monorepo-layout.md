@@ -60,12 +60,14 @@ orzeus/
 ## Dependency rules
 
 ```
-schema  ◀── core ◀── store, trace, git, checks, mcp-gateway, providers ◀── services/engine
+schema  ◀── trace
+schema  ◀── core ◀── store (+ trace), git, checks, mcp-gateway, providers ◀── services/engine
 schema  ◀── protocol ◀── apps/desktop (UI)        services/engine ──▶ protocol
 ```
 
 - `schema` and `core` never import Node or DOM APIs. They are unit-tested without IO.
 - Adapters depend on `core` ports, never on each other.
+- The exact allowed edges live in `tooling/scripts/dependency-rules.json`.
 - The UI depends only on `protocol` and `schema`. It cannot import engine code.
 - Enforced two ways: TypeScript project references (a package can only import what it
   references) and a `tooling/scripts/check-deps` step in `pnpm check`.
@@ -114,6 +116,8 @@ One command, `pnpm check`, runs locally and in CI:
 
 Conventions:
 
+- Biome's `useLiteralKeys` is off because it conflicts with TypeScript's
+  `noPropertyAccessFromIndexSignature` (records keyed by id are read as `nodes["a"]`).
 - Conventional Commit messages (Ryu commits; Claude never runs `git add/commit/push`).
 - Every package has a short README stating its purpose and its public API.
 - Errors are typed (`Result`-style returns inside `core`, exceptions only at IO edges) and every

@@ -8,4 +8,6 @@ Pure. Depends only on zod. No IO, no Node or DOM APIs.
 
 ## Status
 
-Skeleton (Phase 0). See [docs/plan/phased-plan.md](../../docs/plan/phased-plan.md) for when it gets built.
+Implemented in Phase 1.
+
+Entry points: everything is exported from `src/index.ts`. Parse untrusted input with the schemas (e.g. `TaskDAG.safeParse`) or with `parseEventDraft` / `parseTraceEvent` for events.
