@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
-import { encodeLine, RpcClient } from "@orzeus/protocol";
+import { encodeLine, RpcClient, type RpcHandlers } from "@orzeus/protocol";
 import { describe, expect, it } from "vitest";
 import { createHandlers } from "./handlers.js";
 import { createJsonLogger } from "./logger.js";
@@ -24,7 +24,7 @@ describe("engine", () => {
     const served = serveStdio({
       input,
       output,
-      handlers: createHandlers(info),
+      handlers: createHandlers(info) as RpcHandlers,
       logger: createJsonLogger((line) => logs.push(line)),
     });
 
@@ -59,7 +59,7 @@ describe("engine", () => {
     const served = serveStdio({
       input,
       output,
-      handlers: createHandlers(info),
+      handlers: createHandlers(info) as RpcHandlers,
       logger: createJsonLogger(() => undefined),
     });
     input.end(encodeLine({ jsonrpc: "2.0", method: "ui.hello" }));

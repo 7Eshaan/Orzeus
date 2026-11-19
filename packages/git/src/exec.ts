@@ -85,6 +85,11 @@ export function execGit(
         stderr: err,
       });
     });
+    // git may exit before reading all of stdin (e.g. a command that ignores it). The exit code
+    // reports any real failure, so a broken pipe here must not become an uncaught exception.
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") reject(error);
+    });
     child.stdin.end(options.input ?? "");
   });
 }

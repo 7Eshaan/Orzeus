@@ -1,0 +1,194 @@
+.goalBar {
+  max-width: 760px;
+  margin: 10vh auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.title {
+  font-size: var(--text-2xl);
+  text-align: center;
+}
+.subtitle {
+  margin: 0;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.prompt {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+}
+.goalInput {
+  flex: 1;
+  resize: vertical;
+  padding: var(--space-3);
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: var(--text-md);
+}
+.options {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: var(--space-3);
+}
+.hint {
+  margin: 0;
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.error {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-bad);
+  background: var(--color-bad-soft);
+}
+.mission {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.runHeader {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+.goal {
+  font-size: var(--text-xl);
+}
+.meta {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.actions {
+  flex-shrink: 0;
+  white-space: nowrap;
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.idle {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.graph {
+  margin: 0;
+  height: 360px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.flowNode {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  width: 200px !important;
+  color: var(--color-text) !important;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  font-size: var(--text-sm);
+  text-align: left;
+  color: var(--color-text);
+}
+.card[data-tone="active"] {
+  border-color: var(--color-active);
+  background: var(--color-active-soft);
+}
+.card[data-tone="ok"] {
+  border-color: var(--color-ok);
+  background: var(--color-ok-soft);
+}
+.card[data-tone="attention"] {
+  border-color: var(--color-attention);
+  background: var(--color-attention-soft);
+}
+.card[data-tone="bad"] {
+  border-color: var(--color-bad);
+  background: var(--color-bad-soft);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+.table td {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+.sub {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+.planHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+.planList {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.planList h3 {
+  font-size: var(--text-md);
+}
+.facts {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 2px var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+}
+.facts dt {
+  color: var(--color-text-muted);
+}
+.facts dd {
+  margin: 0;
+}
+.planFile summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+.planFile textarea {
+  width: 100%;
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}

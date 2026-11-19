@@ -7,11 +7,14 @@
   "scripts": {
     "web:dev": "vite",
     "web:build": "vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "web:bridge": "node ../../tooling/scripts/dev-bridge.ts"
   },
   "dependencies": {
     "@orzeus/protocol": "workspace:*",
+    "@orzeus/schema": "workspace:*",
     "@tauri-apps/api": "2.12.5",
+    "@xyflow/react": "13.0.2",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

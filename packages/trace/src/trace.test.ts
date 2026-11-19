@@ -165,3 +165,55 @@ describe("hash chain", () => {
     expect(verifyChain(reread, sha256).ok).toBe(true);
   });
 });
+
+describe("OTLP export", () => {
+  it("emits one span per event with GenAI attributes on model calls", async () => {
+    const { exportOtlp } = await import("./otlp.js");
+    const prev = chainOf(1)[0] as TraceEvent;
+    const call = sealEvent(
+      runId,
+      {
+        ...draft(5),
+        type: "model.call",
+        payload: {
+          model: { provider: "openai", adapter: "codex-app-server", model: "m" },
+          tier: "frontier",
+          purpose: "plan",
+          usage: {
+            inputTokens: 10,
+            outputTokens: 2,
+            cacheReadTokens: 5,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+          },
+          costMicroUsd: null,
+          latencyMs: 250,
+        },
+      } as never,
+      { seq: prev.seq, hash: prev.hash },
+      sha256,
+    );
+    const otlp = JSON.parse(exportOtlp([prev, call])) as {
+      resourceSpans: {
+        scopeSpans: {
+          spans: {
+            name: string;
+            startTimeUnixNano: string;
+            endTimeUnixNano: string;
+            attributes: { key: string; value: Record<string, unknown> }[];
+          }[];
+        }[];
+      }[];
+    };
+    const spans = otlp.resourceSpans[0]?.scopeSpans[0]?.spans ?? [];
+    expect(spans.map((s) => s.name)).toEqual(["run.paused", "chat m"]);
+    const model = spans[1];
+    expect(BigInt(model?.endTimeUnixNano ?? 0) - BigInt(model?.startTimeUnixNano ?? 0)).toBe(
+      250_000_000n,
+    );
+    expect(model?.attributes).toContainEqual({
+      key: "gen_ai.usage.input_tokens",
+      value: { intValue: "15" },
+    });
+  });
+});

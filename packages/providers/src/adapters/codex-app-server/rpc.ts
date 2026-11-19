@@ -63,6 +63,8 @@ export class CodexRpc {
         resolve(null);
       });
     });
+    // A write racing the process exit fails with EPIPE; "close" above already rejects what was pending.
+    this.#child.stdin.on("error", () => undefined);
     this.#child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       this.stderr.push(chunk);
       if (this.stderr.length > 200) this.stderr.shift();

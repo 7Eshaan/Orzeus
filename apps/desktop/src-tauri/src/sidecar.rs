@@ -144,6 +144,7 @@ async fn run_once(app: &AppHandle) -> Result<Option<i32>, String> {
         .shell()
         .command(&spec.program)
         .args(&spec.args)
+        .envs(crate::secrets::engine_env())
         .spawn()
         .map_err(|error| format!("failed to start engine with `{}`: {error}", spec.program))?;
 
@@ -206,6 +207,19 @@ pub fn engine_send(line: String, handle: State<'_, EngineHandle>) -> Result<(), 
     child
         .write(&bytes)
         .map_err(|error| format!("failed to write to engine: {error}"))
+}
+
+/// Stops the engine; the supervisor starts it again (picking up changed API keys).
+#[tauri::command]
+pub fn engine_restart(handle: State<'_, EngineHandle>) -> Result<(), String> {
+    let mut guard = handle
+        .child
+        .lock()
+        .map_err(|_| "engine handle is poisoned".to_owned())?;
+    if let Some(child) = guard.take() {
+        child.kill().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Latest engine status, for a webview that missed earlier status events.

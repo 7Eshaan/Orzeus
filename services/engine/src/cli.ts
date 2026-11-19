@@ -1,21 +1,18 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
-import { buildRepoMap, describeTooling, renderRepoMap } from "@orzeus/context";
 import type { RunState } from "@orzeus/core";
 import { MEMORY_KINDS, type MemoryKind } from "@orzeus/memory-server";
-import type { CheckpointId, PlannerOutput, ProjectId, RunId } from "@orzeus/schema";
+import type { CheckpointId, PlannerOutput, RunId } from "@orzeus/schema";
 import { exportJsonl } from "@orzeus/trace";
 import { createEngine, type Engine, headlessGate } from "./compose.js";
 import { ulid } from "./ids.js";
 import { createJsonLogger } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
-import { checkCommandsExist } from "./plan-checks.js";
 import { expandHandPlan, PlanFileError } from "./plan-file.js";
-import { PlanningError, planGoal } from "./planner.js";
+import { planRun, prepareRepo } from "./plan-run.js";
 import { ENGINE_VERSION } from "./version.js";
 
 const DEFAULT_LOCAL_MODEL = "openai-compatible:lfm3:latest";
@@ -104,18 +101,6 @@ async function repoOf(engine: Engine, path: string | undefined): Promise<string>
   return engine.git.topLevel(resolve(path));
 }
 
-function projectFor(engine: Engine, root: string, defaultBranch: string): ProjectId {
-  const id = `project-${createHash("sha256").update(root).digest("hex").slice(0, 16)}` as ProjectId;
-  engine.store.ensureProject({
-    id,
-    name: root.split("/").at(-1) ?? root,
-    repoRoot: root,
-    defaultBranch,
-    createdAt: Date.now(),
-  });
-  return id;
-}
-
 async function main(argv: readonly string[]): Promise<number> {
   const { values, positionals } = parseArgs({
     args: [...argv],
@@ -185,48 +170,24 @@ async function main(argv: readonly string[]): Promise<number> {
   try {
     switch (command) {
       case "run": {
-        const root = await repoOf(engine, values.repo);
-        const baseCommit = await engine.git.revParse(root, values.base);
-        const repo = { root, baseRef: values.base, baseCommit };
-        const runId = ulid() as RunId;
-        const projectId = projectFor(engine, root, values.base);
+        if (values.repo === undefined) throw new UsageError("--repo is required");
+        const prepared = await prepareRepo(engine, values.repo, values.base);
+        let runId: RunId;
         let plan: PlannerOutput;
-
         if (target !== undefined) {
-          plan = expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, repo);
-          engine.orchestrator.createRun(projectId, plan);
+          runId = ulid() as RunId;
+          plan = expandHandPlan(JSON.parse(readFileSync(target, "utf8")), runId, prepared.repo);
+          engine.orchestrator.createRun(prepared.projectId, plan);
         } else {
           if (values.goal === undefined) throw new UsageError("give a plan file or --goal");
-          const planner = engine.planner(plannerSpec);
-          const worker = engine.workerModel(values.worker);
-          engine.orchestrator.startRun(projectId, runId, values.goal, repo);
-          say(`Run ${runId}: planning with ${plannerSpec}…`);
-          const map = await buildRepoMap(engine.git, root);
-          const memories = engine.memory.search(root, values.goal, 8);
-          try {
-            const result = await planGoal({
-              goal: values.goal,
-              runId,
-              repo,
-              repoMap: renderRepoMap(map),
-              tooling: describeTooling(root),
-              validate: (candidate) => checkCommandsExist(candidate, root),
-              memories,
-              planner,
-              tiers: { worker: [worker], local: [worker] },
-              signal: AbortSignal.timeout(600_000),
-            });
-            for (const warning of result.warnings) say(`  note: ${warning}`);
-            plan = result.plan;
-            engine.orchestrator.proposePlan(plan, result.calls);
-            say(`Plan: ${result.summary}`);
-          } catch (error) {
-            if (error instanceof PlanningError) {
-              engine.orchestrator.failPlanning(runId, error.calls, error.message);
-              return 1;
-            }
-            throw error;
-          }
+          const planned = await planRun(
+            engine,
+            { goal: values.goal, prepared, planner: plannerSpec, worker: values.worker },
+            say,
+          );
+          if (planned.plan === null) return 1;
+          runId = planned.runId;
+          plan = planned.plan;
         }
 
         say(describePlan(plan));

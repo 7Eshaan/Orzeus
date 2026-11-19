@@ -4,6 +4,7 @@
 //! JSON-RPC lines between the engine's stdio and the webview. All orchestration logic lives in
 //! the engine (see `docs/decisions/0001-engine-as-node-sidecar.md`).
 
+mod secrets;
 mod sidecar;
 
 use tauri::{Manager, RunEvent};
@@ -23,7 +24,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sidecar::engine_send,
-            sidecar::engine_status
+            sidecar::engine_status,
+            sidecar::engine_restart,
+            secrets::secret_status,
+            secrets::secret_set,
+            secrets::secret_delete
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Orzeus app");

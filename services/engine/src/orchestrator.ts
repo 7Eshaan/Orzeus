@@ -83,6 +83,8 @@ export interface GateAnswer {
   readonly approved: boolean;
   readonly actor: Actor;
   readonly note?: string;
+  /** Instead of yes/no, guidance for the worker that asked (worker approvals only). */
+  readonly steer?: string;
 }
 
 export interface LockSettings {
@@ -152,6 +154,8 @@ export class RunOrchestrator {
   readonly #traceIds = new Map<RunId, string>();
   readonly #active = new Map<string, Promise<void>>();
   readonly #gateways = new Map<RunId, Promise<McpGateway | null>>();
+  #stopped = false;
+  readonly #heartbeats = new Set<ReturnType<typeof setInterval>>();
   readonly #breakers: CircuitBreakers;
 
   constructor(options: OrchestratorOptions) {
@@ -162,6 +166,16 @@ export class RunOrchestrator {
   // ───────────────────────── Run creation ─────────────────────────
 
   /** Records a new run with a ready-made (hand-written) plan, awaiting plan approval. */
+  /**
+   * Stops lock heartbeats before the database closes. Locks held by runs still in flight are left
+   * to expire, so another engine can take them over after the TTL.
+   */
+  stop(): void {
+    this.#stopped = true;
+    for (const beat of this.#heartbeats) clearInterval(beat);
+    this.#heartbeats.clear();
+  }
+
   createRun(projectId: ProjectId, plan: PlannerOutput): RunId {
     this.startRun(projectId, plan.dag.runId, plan.dag.goal, plan.dag.repo);
     return this.proposePlan(plan, []);
@@ -298,15 +312,21 @@ export class RunOrchestrator {
       }
     }
     const beat = setInterval(() => {
-      if (!settings.locks.heartbeat(runId, this.#owner, settings.ttlMs)) {
-        this.#o.logger.log("error", "lost run lock", { runId });
+      try {
+        if (!settings.locks.heartbeat(runId, this.#owner, settings.ttlMs)) {
+          this.#o.logger.log("error", "lost run lock", { runId });
+        }
+      } catch (error) {
+        this.#o.logger.log("error", "run lock heartbeat failed", { runId, error: String(error) });
       }
     }, settings.heartbeatMs);
+    this.#heartbeats.add(beat);
     try {
       return await this.#withGateway(runId, work);
     } finally {
       clearInterval(beat);
-      settings.locks.release(runId, this.#owner);
+      this.#heartbeats.delete(beat);
+      if (!this.#stopped) settings.locks.release(runId, this.#owner);
     }
   }
 
@@ -884,9 +904,11 @@ export class RunOrchestrator {
     );
     await session.respond(
       event.requestId,
-      answer.approved
-        ? { kind: "allow_once" }
-        : { kind: "deny", reason: answer.note ?? "A human gate was not approved." },
+      answer.steer !== undefined
+        ? { kind: "steer", message: answer.steer }
+        : answer.approved
+          ? { kind: "allow_once" }
+          : { kind: "deny", reason: answer.note ?? "A human gate was not approved." },
     );
     return answer.approved ? "approved" : "denied";
   }
@@ -908,9 +930,12 @@ export class RunOrchestrator {
         "approval.resolved",
         {
           approvalId,
-          decision: answer.approved
-            ? { kind: "allow_once" }
-            : { kind: "deny", reason: answer.note ?? "Not approved." },
+          decision:
+            answer.steer !== undefined
+              ? { kind: "steer", message: answer.steer }
+              : answer.approved
+                ? { kind: "allow_once" }
+                : { kind: "deny", reason: answer.note ?? "Not approved." },
         },
         { ...where, actor: answer.actor },
       ),

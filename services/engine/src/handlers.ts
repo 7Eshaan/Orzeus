@@ -8,8 +8,8 @@ export interface EngineInfo {
   readonly arch: string;
 }
 
-/** All RPC handlers. Dependencies are passed in so handlers stay testable without a process. */
-export function createHandlers(info: EngineInfo): RpcHandlers {
+/** Engine-level handlers; the run handlers live in EngineService. */
+export function createHandlers(info: EngineInfo): Pick<RpcHandlers, "engine.ping"> {
   return {
     "engine.ping": () => ({
       engineVersion: ENGINE_VERSION,

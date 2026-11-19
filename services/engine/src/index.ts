@@ -23,6 +23,7 @@ export {
   PlanFileError,
   type TierModels,
 } from "./plan-file.js";
+export { planRun, prepareRepo } from "./plan-run.js";
 export {
   type PlannerModel,
   type PlanningCall,
@@ -30,5 +31,6 @@ export {
   type PlanningResult,
   planGoal,
 } from "./planner.js";
+export { EngineService, type ServiceOptions } from "./service.js";
 export { serveStdio } from "./stdio.js";
 export { ENGINE_VERSION } from "./version.js";

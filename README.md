@@ -3,7 +3,7 @@
 A local-first multi-agent orchestrator desktop app: frontier models plan, cheap worker models
 build in parallel git worktrees, and only failures and final diffs go back to the frontier.
 
-Status: Phase 2 done: headless runs with real local or Codex workers. Design docs start at [docs/README.md](docs/README.md).
+Status: Phase 5 done: the desktop UI runs, approves and inspects multi-worker runs. Design docs start at [docs/README.md](docs/README.md).
 
 ## Requirements
 
@@ -17,6 +17,7 @@ Status: Phase 2 done: headless runs with real local or Codex workers. Design doc
 ```bash
 pnpm install        # install workspace dependencies
 pnpm dev            # build packages, then open the desktop app with the engine sidecar
+pnpm dev:web        # same UI in a browser: http://localhost:1420/?bridge=http://127.0.0.1:1421
 pnpm check          # everything CI runs: Biome, dependency rules, tsc -b, Vitest, fmt/clippy/cargo test
 pnpm test           # TypeScript tests only
 pnpm format         # apply Biome formatting

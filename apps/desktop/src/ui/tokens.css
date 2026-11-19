@@ -1,26 +1,40 @@
 /*
- * Design tokens. Light-first, calm and airy: warm neutrals, one quiet accent, and one
- * "needs you" colour. Every colour pair used for text meets WCAG AA contrast.
+ * Design tokens. Light-first, calm and airy: warm neutrals, one quiet accent, amber for
+ * "needs you", and red only for failure. Text colour pairs meet WCAG AA (checked by
+ * ui/contrast.test.ts).
  */
 :root {
   --color-bg: #f8f7f4;
   --color-surface: #ffffff;
+  --color-surface-muted: #f2f1ed;
   --color-border: #e8e6e1;
+  --color-border-strong: #d9d6cf;
   --color-text: #1d2125;
   --color-text-muted: #5f6670;
-  --color-text-faint: #9aa0a8;
+  --color-text-faint: #8a9099;
   --color-accent: #2f6f62;
+  --color-accent-soft: #e6f0ed;
   --color-on-accent: #ffffff;
-  --color-ok: #3c9a76;
-  --color-attention: #c98a1b;
+  --color-ok: #286b4e;
+  --color-ok-soft: #e7f3ec;
+  --color-active: #2f5f8a;
+  --color-active-soft: #e8eff6;
+  --color-attention: #8a5806;
+  --color-attention-soft: #fbf1df;
+  --color-bad: #b03a2e;
+  --color-bad-soft: #fbeae7;
+  --color-diff-added: #e9f5ec;
+  --color-diff-removed: #fbecea;
 
   --font-sans:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 
+  --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
   --text-md: 0.9375rem;
   --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
   --text-2xl: 1.75rem;
 
   --space-1: 4px;
@@ -31,9 +45,11 @@
   --space-6: 32px;
   --space-8: 48px;
 
+  --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 14px;
   --radius-full: 999px;
 
   --shadow-soft: 0 1px 2px rgb(29 33 37 / 4%), 0 8px 24px rgb(29 33 37 / 5%);
+  --sidebar-width: 248px;
 }

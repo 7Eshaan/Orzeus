@@ -22,6 +22,11 @@ export {
   type MethodResult,
   type Methods,
   methods,
+  type NotificationName,
+  type NotificationParams,
+  notifications,
   PROTOCOL_VERSION,
+  parseNotification,
 } from "./methods.js";
 export { type HandleOptions, handleRpcLine, type RpcHandlers } from "./server.js";
+export * from "./views.js";

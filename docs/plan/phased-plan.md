@@ -171,6 +171,12 @@ Exit: chaos test green; a 6+ node plan runs with 3 workers in parallel.
 
 ## Phase 5: Desktop UI (about 2 weeks)
 
+Status: **done** (2026-11-19). Exit check: from the UI (in the browser through the dev bridge,
+then in the real Tauri window), the calc hand plan was loaded, reviewed and approved; local
+`lfm3` workers built three nodes in parallel; the merge gate showed the diff and was approved
+from the keyboard; the branch fast-forwarded with 3/3 tests passing; "Verify chain" reported
+58 events OK. A WCAG contrast test covers every text/background token pair. No Codex quota used.
+
 Light, calm, airy: one neutral palette, generous spacing, one accent colour for "needs you".
 
 - Mission Control: prompt bar, live DAG (`@xyflow/react`) coloured by status, worker pills.
@@ -183,6 +189,29 @@ Light, calm, airy: one neutral palette, generous spacing, one accent colour for 
 Exit: full run from the UI; keyboard-navigable; accessibility check (contrast, focus order).
 
 **Commit point 7:** `feat(desktop): mission control, approvals, trace and quota UI`.
+
+### Phase 5 notes
+
+- Protocol v2 (`@orzeus/protocol`): typed methods for runs, plans, approvals, blobs, quota,
+  settings and memory, plus notifications (`run.updated`, `approvals.changed`, `progress`) the
+  engine writes to stdout. The UI also polls slowly, so a missed notification only delays a view.
+- `EngineService` (`services/engine/src/service.ts`) owns the engine inside the sidecar. Runs are
+  planned and driven in the background; gates (risky actions, budget, merge) wait in an inbox
+  until someone answers them in the Approval queue. Steer answers become guidance for the next
+  attempt.
+- A goal can be planned by the frontier model (Anthropic if a key is in the Keychain, else the
+  local model) or started from a hand-written plan pasted into the goal bar.
+- API keys live in the macOS Keychain (`keyring` crate, service `dev.orzeus.desktop`). The Rust
+  shell injects them into the sidecar's environment and never returns them to the webview;
+  saving a key restarts the sidecar.
+- The dev bridge (`pnpm dev:web`) runs the UI in an ordinary browser for design and testing.
+  It listens on 127.0.0.1 only and accepts requests only from the Vite origin.
+- JSONL and OTLP (GenAI semantic conventions) export are both in the Trace Inspector.
+- Not done: MCP server management and OAuth in Settings, and editing a
+  plan's nodes in the UI (a hand plan can be pasted instead).
+- Found while hardening the test suite: git child processes could crash the engine with EPIPE
+  when git exited before reading stdin, and lock heartbeats could fire after the database
+  closed. Both are fixed.
 
 ## Phase 6: Remaining adapters and telemetry polish (about 1 week)
 

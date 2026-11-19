@@ -3,5 +3,13 @@
   "identifier": "default",
   "description": "Permissions for the main window: core defaults plus the engine relay commands.",
   "windows": ["main"],
-  "permissions": ["core:default", "allow-engine-send", "allow-engine-status"]
+  "permissions": [
+    "core:default",
+    "allow-engine-send",
+    "allow-engine-status",
+    "allow-engine-restart",
+    "allow-secret-status",
+    "allow-secret-set",
+    "allow-secret-delete"
+  ]
 }

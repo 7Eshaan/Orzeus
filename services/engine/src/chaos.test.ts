@@ -61,7 +61,7 @@ function runChild(
   runId: string,
   seed: number,
   killAfterMs: number | null,
-): Promise<{ code: number | null; out: string; killed: boolean }> {
+): Promise<{ code: number | null; out: string; err: string; killed: boolean }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CHILD, dataDir, runId, String(seed)], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -71,7 +71,10 @@ function runChild(
     child.stdout.setEncoding("utf8").on("data", (c: string) => {
       out += c;
     });
-    child.stderr.resume();
+    let err = "";
+    child.stderr.setEncoding("utf8").on("data", (c: string) => {
+      err = (err + c).slice(-4_000);
+    });
     const timer =
       killAfterMs === null
         ? null
@@ -81,7 +84,7 @@ function runChild(
           }, killAfterMs);
     child.on("close", (code) => {
       if (timer !== null) clearTimeout(timer);
-      resolve({ code, out, killed });
+      resolve({ code, out, err, killed });
     });
   });
 }
@@ -122,7 +125,9 @@ describe("chaos: kill -9 at random points", () => {
         if (result.killed) kills++;
         completed = !result.killed && result.out.includes('"status":"completed"');
         if (!result.killed && !completed)
-          throw new Error(`engine exited (${result.code}) without completing: ${result.out}`);
+          throw new Error(
+            `engine exited (${result.code}) without completing: ${result.out}\n${result.err}`,
+          );
       }
       expect(completed).toBe(true);
 

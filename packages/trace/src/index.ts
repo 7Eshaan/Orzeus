@@ -15,3 +15,4 @@ export {
   verifyChain,
 } from "./chain.js";
 export { exportJsonl } from "./export.js";
+export { exportOtlp } from "./otlp.js";

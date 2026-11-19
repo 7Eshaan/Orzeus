@@ -16,5 +16,8 @@ export default defineConfig({
     environment: "node",
     passWithNoTests: false,
     restoreMocks: true,
+    // Engine tests drive real git repositories and run alongside the chaos test, which keeps every
+    // core busy; 1-3 s on an idle machine can pass 5 s under that load.
+    testTimeout: 20_000,
   },
 });

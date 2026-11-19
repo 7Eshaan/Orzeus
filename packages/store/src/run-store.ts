@@ -80,10 +80,25 @@ export class SqliteRunStore implements RunEventStore {
   readonly #hash: HashFn;
   readonly #states = new Map<RunId, RunState>();
 
+  readonly #listeners = new Set<(runId: RunId, state: RunState) => void>();
+
   constructor(db: Db, options: { readonly hash?: HashFn } = {}) {
     this.#db = db;
     this.#hash = options.hash ?? sha256Text;
     this.blobs = new BlobStore(db);
+  }
+
+  /** Called after every committed append (for live UI updates). Returns an unsubscribe function. */
+  onAppend(listener: (runId: RunId, state: RunState) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /** Every run, newest first. */
+  runIds(): RunId[] {
+    return this.#db
+      .all<{ id: RunId }>("SELECT id FROM runs ORDER BY created_at DESC")
+      .map((r) => r.id);
   }
 
   ensureProject(project: ProjectRecord): void {
@@ -117,6 +132,13 @@ export class SqliteRunStore implements RunEventStore {
       return state as RunState;
     });
     this.#states.set(runId, final);
+    for (const listener of this.#listeners) {
+      try {
+        listener(runId, final);
+      } catch {
+        // listeners must not break appends
+      }
+    }
     return final;
   }
 

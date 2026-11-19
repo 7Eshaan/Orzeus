@@ -76,6 +76,8 @@ export interface Engine {
   >;
   /** Resolves "adapter:model" (e.g. "openai-compatible:lfm3:latest") to a planner. */
   planner(spec: string): PlannerModel;
+  /** Worker adapters, keyed by adapter id. */
+  readonly workers: AdapterRegistry;
   /** Resolves "adapter:model" to a worker model reference. */
   workerModel(spec: string): ModelRef;
   close(): void;
@@ -268,6 +270,7 @@ export function createEngine(config: EngineConfig): Engine {
     git,
     orchestrator,
     planners,
+    workers,
     planner(spec) {
       const { adapter, model } = parseModelSpec(spec);
       const entry = planners.get(adapter);
@@ -292,6 +295,7 @@ export function createEngine(config: EngineConfig): Engine {
       return { provider: entry.adapter.manifest.provider, adapter, model };
     },
     close: () => {
+      orchestrator.stop();
       memory.close();
       db.close();
     },

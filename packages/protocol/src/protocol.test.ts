@@ -12,7 +12,8 @@ const pingResult: EnginePingResult = {
   startedAt: 1,
 };
 
-const handlers: RpcHandlers = { "engine.ping": () => pingResult };
+/** Only ping is exercised here; the full method set is tested in the engine. */
+const handlers = { "engine.ping": () => pingResult } as unknown as RpcHandlers;
 
 /** Wires a client straight to the server, the way the Rust relay does. */
 function connectedClient(serverHandlers: RpcHandlers = handlers): RpcClient {
@@ -40,11 +41,11 @@ describe("client and server round trip", () => {
 
   it("surfaces handler failures as a generic internal error", async () => {
     const seen: string[] = [];
-    const failing: RpcHandlers = {
+    const failing = {
       "engine.ping": () => {
         throw new Error("secret detail");
       },
-    };
+    } as unknown as RpcHandlers;
     const reply = await handleRpcLine(
       failing,
       encodeLine({ jsonrpc: "2.0", id: 7, method: "engine.ping", params: {} }),
