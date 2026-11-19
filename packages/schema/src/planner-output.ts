@@ -57,3 +57,29 @@ export const PlanDraft = z.object({
   nodes: z.array(PlanDraftNode),
 });
 export type PlanDraft = z.infer<typeof PlanDraft>;
+
+/** The frontier model's answer when a node escalates. */
+export const SteerDecision = z.object({
+  action: z
+    .enum(["retry_with_guidance", "rewrite_task", "give_up"])
+    .describe(
+      "retry_with_guidance: same task plus your note; rewrite_task: replace the objective/constraints; give_up: stop this node",
+    ),
+  note: z.string().describe("Specific guidance for the worker's next attempt, or why to give up"),
+  revisedObjective: z
+    .string()
+    .nullable()
+    .describe("New objective when action is rewrite_task, otherwise null"),
+  revisedConstraints: z.array(z.string()).describe("Constraints to use from now on (may be empty)"),
+});
+export type SteerDecision = z.infer<typeof SteerDecision>;
+
+/** The frontier model's review of the integrated diff. */
+export const ReviewDecision = z.object({
+  verdict: z.enum(["approve", "request_changes"]),
+  summary: z.string().describe("Two or three sentences on what the change does"),
+  concerns: z
+    .array(z.string())
+    .describe("Specific problems that must be fixed; empty when approving"),
+});
+export type ReviewDecision = z.infer<typeof ReviewDecision>;

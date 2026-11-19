@@ -71,6 +71,8 @@ export const HandPlan = z.object({
   nodes: z.array(HandNode).min(1),
   budget: RunBudget.partial().default({}),
   integrationBranch: z.string().min(1).optional(),
+  /** Ask the frontier model to review the integrated diff before the merge gate. */
+  integrationReview: z.boolean().default(false),
 });
 export type HandPlan = z.infer<typeof HandPlan>;
 
@@ -149,7 +151,7 @@ export function expandHandPlan(input: unknown, runId: RunId, repo: RepoRef): Pla
       strategy: "merge_topological",
       branch: plan.integrationBranch ?? `orzeus/${runId}/integration`,
       globalChecks: [],
-      frontierReview: false,
+      frontierReview: plan.integrationReview,
     },
     budget: withDefaults(RUN_BUDGET, plan.budget),
   };
@@ -287,5 +289,5 @@ export function draftToHandPlan(
       },
     };
   });
-  return { plan: { goal, nodes }, dropped };
+  return { plan: { goal, nodes, integrationReview: true }, dropped };
 }

@@ -79,7 +79,10 @@ describe("migrations", () => {
   it("apply once, are idempotent, and use WAL", () => {
     expect(migrate(db)).toEqual([]);
     expect(db.get<{ journal_mode: string }>("PRAGMA journal_mode")?.journal_mode).toBe("wal");
-    expect(db.all("SELECT version FROM schema_migrations")).toEqual([{ version: 1 }]);
+    expect(db.all("SELECT version FROM schema_migrations")).toEqual([
+      { version: 1 },
+      { version: 2 },
+    ]);
   });
 
   it("match the SQL documented in docs/architecture/03-sqlite-schema.md", () => {
@@ -87,9 +90,13 @@ describe("migrations", () => {
       new URL("../../../docs/architecture/03-sqlite-schema.md", import.meta.url),
       "utf8",
     );
-    const section = doc.slice(doc.indexOf("## Migration 0001"), doc.indexOf("## memory.db"));
-    const documented = /```sql\n([\s\S]*?)```/.exec(section)?.[1];
-    expect(documented?.trim()).toBe(MIGRATIONS[0]?.sql.trim());
+    for (const migration of MIGRATIONS) {
+      const heading = `## Migration ${String(migration.version).padStart(4, "0")}`;
+      const start = doc.indexOf(heading);
+      expect(start, heading).toBeGreaterThanOrEqual(0);
+      const documented = /```sql\n([\s\S]*?)```/.exec(doc.slice(start))?.[1];
+      expect(documented?.trim(), heading).toBe(migration.sql.trim());
+    }
   });
 
   it("refuse an edited migration and an unknown future version", () => {
@@ -99,6 +106,33 @@ describe("migrations", () => {
     expect(() => migrate(fresh, edited)).toThrow(MigrationError);
     expect(() => migrate(fresh, [])).toThrow(/does not know/);
     fresh.close();
+  });
+});
+
+describe("run locks", () => {
+  it("allow one owner at a time, refresh with heartbeats, and expire after a crash", async () => {
+    const { RunLocks } = await import("./run-locks.js");
+    let now = 1_000;
+    const locks = new RunLocks(db, () => now);
+    const store = newStore(db);
+    const dag = buildDag([{ id: "a" }]);
+    store.append(TEST_RUN_ID, [
+      draft("run.created", { projectId: TEST_PROJECT, goal: dag.goal, repo: dag.repo }, { ts: 1 }),
+    ]);
+    expect(locks.acquire(TEST_RUN_ID, "engine-a", 1, 5_000)).toEqual({ ok: true });
+    expect(locks.acquire(TEST_RUN_ID, "engine-b", 2, 5_000)).toMatchObject({
+      ok: false,
+      heldBy: { owner: "engine-a", pid: 1 },
+    });
+    now = 4_000;
+    expect(locks.heartbeat(TEST_RUN_ID, "engine-a", 5_000)).toBe(true);
+    now = 8_000;
+    expect(locks.acquire(TEST_RUN_ID, "engine-b", 2, 5_000).ok).toBe(false);
+    now = 9_100; // engine-a stopped heartbeating at 4_000 (expired 9_000)
+    expect(locks.acquire(TEST_RUN_ID, "engine-b", 2, 5_000)).toEqual({ ok: true });
+    expect(locks.heartbeat(TEST_RUN_ID, "engine-a", 5_000)).toBe(false);
+    locks.release(TEST_RUN_ID, "engine-b");
+    expect(locks.holder(TEST_RUN_ID)).toBeNull();
   });
 });
 

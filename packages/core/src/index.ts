@@ -11,6 +11,13 @@ export {
   frontierTokensExceeded,
   nodeBudgetTrips,
 } from "./budget.js";
+export { type BreakerOptions, CircuitBreakers, DEFAULT_BREAKER } from "./circuit-breaker.js";
+export {
+  REVIEW_SYSTEM_PROMPT,
+  renderReviewPrompt,
+  renderSteerPrompt,
+  STEER_SYSTEM_PROMPT,
+} from "./frontier-prompts.js";
 export { globToRegExp, matchesAny, normalizeRelativePath, scopesMayOverlap } from "./glob.js";
 export { type PlanIssue, type PlanValidation, validatePlan } from "./plan-validation.js";
 export {

@@ -118,3 +118,28 @@ describe("WorktreeManager", () => {
     await expect(worktrees.prepare(repo, "..", "..", base)).rejects.toThrow(/outside/);
   });
 });
+
+describe("fastForward", () => {
+  it("moves a checked-out branch only when clean and fast-forwardable", async () => {
+    const worktrees = new WorktreeManager(git, join(dir, "worktrees"));
+    const wt = await worktrees.prepare(repo, "RUN", "ff", base);
+    writeFileSync(join(wt.path, "new.txt"), "new\n");
+    const { commit } = await git.snapshot(wt.path, "add new");
+    expect(await git.currentBranch(repo)).toBe("main");
+
+    writeFileSync(join(repo, "README.md"), "dirty\n");
+    expect(await git.fastForward(repo, "main", base, commit)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("uncommitted"),
+    });
+    await git.run(repo, ["checkout", "--", "README.md"]);
+
+    expect(await git.fastForward(repo, "main", base, commit)).toEqual({ ok: true });
+    expect(await git.revParse(repo, "main")).toBe(commit);
+    expect(readFileSync(join(repo, "new.txt"), "utf8")).toBe("new\n");
+    expect(await git.fastForward(repo, "main", base, commit)).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("moved"),
+    });
+  });
+});

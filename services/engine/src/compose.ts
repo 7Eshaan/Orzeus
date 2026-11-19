@@ -17,9 +17,14 @@ import {
   type ProviderAdapter,
 } from "@orzeus/providers";
 import { type AccountId, DEFAULT_POLICY, type ModelRef, type PolicyDocument } from "@orzeus/schema";
-import { type Db, openStore, SqliteRunStore } from "@orzeus/store";
+import { type Db, openStore, RunLocks, SqliteRunStore } from "@orzeus/store";
 import type { Logger } from "./logger.js";
-import { RunOrchestrator } from "./orchestrator.js";
+import {
+  type FrontierModel,
+  type GateAnswer,
+  type GateRequest,
+  RunOrchestrator,
+} from "./orchestrator.js";
 import type { PlannerModel } from "./planner.js";
 import { ENGINE_VERSION } from "./version.js";
 
@@ -34,6 +39,19 @@ export interface EngineConfig {
   readonly enableCodex?: boolean;
   /** reasoning_effort for local models; small "thinking" models need "none" or "low" to answer in budget. */
   readonly localReasoningEffort?: "none" | "low" | "medium" | "high";
+  /** Headless approval of the merge into your branch (the CLI asks interactively instead). */
+  readonly approveMerge?: boolean;
+  /** Answers human gates; default: decide from approveAsks / approveMerge. */
+  readonly decideGate?: (gate: GateRequest) => Promise<GateAnswer>;
+  /** Additional structured-output adapters for planning, steering and review (tests, plugins). */
+  readonly extraPlanners?: readonly {
+    readonly adapter: ProviderAdapter;
+    readonly account: AccountContext;
+  }[];
+  /** "adapter:model" for steering and review; usually the planner. */
+  readonly frontier?: string;
+  /** Run lock timing (tests shorten it). */
+  readonly lockTtlMs?: number;
   /** Start the per-run MCP gateway with the memory server (default true). */
   readonly gateway?: boolean;
   /** Override the worker adapters (tests). */
@@ -175,6 +193,29 @@ async function openGateway(dataDir: string, state: RunState): Promise<McpGateway
   });
 }
 
+/** Headless runs have no human at hand: flags decide, and the policy actor is recorded. */
+export function headlessGate(
+  config: Pick<EngineConfig, "approveAsks" | "approveMerge">,
+): (gate: GateRequest) => Promise<GateAnswer> {
+  return async (gate) => {
+    const approved =
+      gate.action.kind === "merge" ? config.approveMerge === true : config.approveAsks === true;
+    const flag = gate.action.kind === "merge" ? "--approve-merge" : "--approve-asks";
+    return {
+      approved,
+      actor: {
+        kind: "policy",
+        ruleId: approved
+          ? `headless${flag.replace("--", "_").replaceAll("-", "_")}`
+          : "headless_no_human",
+      },
+      ...(approved
+        ? {}
+        : { note: `No human is available in headless mode (run with ${flag} to allow).` }),
+    };
+  };
+}
+
 /** The composition root: the only place concrete adapters are wired to core ports. */
 export function createEngine(config: EngineConfig): Engine {
   mkdirSync(config.dataDir, { recursive: true });
@@ -184,6 +225,24 @@ export function createEngine(config: EngineConfig): Engine {
   const git = new Git();
   const workers = config.adapters ?? defaultAdapters(config);
   const planners = plannerAdapters(config);
+  for (const extra of config.extraPlanners ?? []) planners.set(extra.adapter.manifest.id, extra);
+  const resolvePlanner = (spec: string): PlannerModel => {
+    const { adapter, model } = parseModelSpec(spec);
+    const entry = planners.get(adapter);
+    if (entry === undefined) {
+      throw new Error(
+        `planner adapter ${adapter} is not available (have: ${[...planners.keys()].join(", ")}; API adapters need their key in the environment)`,
+      );
+    }
+    return {
+      ref: { provider: entry.adapter.manifest.provider, adapter, model },
+      adapter: entry.adapter,
+      account: entry.account,
+    };
+  };
+  const frontier: FrontierModel | undefined =
+    config.frontier === undefined ? undefined : resolvePlanner(config.frontier);
+  const ttl = config.lockTtlMs ?? 15_000;
   const orchestrator = new RunOrchestrator({
     store,
     git,
@@ -193,7 +252,9 @@ export function createEngine(config: EngineConfig): Engine {
     clock: config.clock ?? { now: Date.now },
     random: config.random ?? Math.random,
     logger: config.logger,
-    approveAsks: config.approveAsks ?? false,
+    decideGate: config.decideGate ?? headlessGate(config),
+    lock: { locks: new RunLocks(db), ttlMs: ttl, heartbeatMs: Math.max(100, Math.floor(ttl / 3)) },
+    ...(frontier === undefined ? {} : { frontier }),
     ...(config.progress === undefined ? {} : { progress: config.progress }),
     ...(config.gateway === false
       ? {}

@@ -10,6 +10,7 @@ export { type Db, type OpenOptions, openDatabase, type SqlValue } from "./db.js"
 export { sha256Bytes, sha256Text } from "./hash.js";
 export { MigrationError, migrate } from "./migrate.js";
 export { MIGRATIONS, type Migration } from "./migrations/index.js";
+export { type AcquireResult, type LockHolder, RunLocks } from "./run-locks.js";
 export {
   CorruptEventError,
   InvalidDraftError,

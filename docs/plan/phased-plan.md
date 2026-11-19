@@ -130,6 +130,11 @@ repo; the trace shows every packet and tool call.
 
 ## Phase 4: Parallelism, recovery, escalation, approvals (about 1.5 weeks)
 
+Status: **done** (2026-11-19). Exit checks: the chaos test (`ORZEUS_CHAOS_RUNS=50`) kills a
+6-node, 3-way-parallel run with SIGKILL at random moments and restarts it until it completes;
+50 runs, 354 SIGKILLs, every run completed with a verified chain, projections equal to a
+rebuild, and the identical integrated tree. A 7-node plan runs with exactly 3 workers at a time.
+
 - Concurrent scheduler with write-scope serialization and leases with heartbeats.
 - Retries with backoff, adapter circuit breakers, budget breakers.
 - Escalation to the frontier model with packet + diff + failing output; steer and subtree
@@ -142,6 +147,27 @@ repo; the trace shows every packet and tool call.
 Exit: chaos test green; a 6+ node plan runs with 3 workers in parallel.
 
 **Commit point 6:** `feat(engine): parallel execution, recovery and escalation`.
+
+### Phase 4 notes
+
+- One engine per run: a run lock in SQLite (migration 0002) with heartbeats. A crashed
+  engine's lock expires and `orzeus resume` takes over; a live engine's run is refused.
+  This replaced per-node leases, which a single owner per run makes unnecessary.
+- The scheduler counts attempts that are still preparing their worktree as occupying a slot.
+  Without that, a third worker could briefly start under a limit of two (found by the breaker test).
+- Escalation goes to the frontier model with the packet, the last diff and the failing check
+  output. It answers retry_with_guidance (the note goes into the next packet), rewrite_task (a new
+  packet is issued for the node) or give_up. Re-planning a whole subtree (adding or removing
+  nodes mid-run) is not implemented; it needs DAG revisions while executing.
+- Integration re-runs every node's checks on the merged result, then (when the plan asks) the
+  frontier model reviews the integrated diff, then the merge gate offers a fast-forward of the
+  user's branch. That needs a clean checkout, and the branch must not have moved since the run started.
+- Budget gates: crossing a cost threshold asks a human; refusing, or reaching 100% or the
+  frontier token cap, pauses the run (`orzeus resume` continues it).
+- Checkpoints are taken at plan approval and after every node succeeds; `orzeus rollback`
+  restores one (also from a failed run) and `orzeus resume` continues from there.
+- Live steering and review with a real frontier model were not exercised, to save the Codex quota.
+  They are covered with a fake frontier model in tests.
 
 ## Phase 5: Desktop UI (about 2 weeks)
 

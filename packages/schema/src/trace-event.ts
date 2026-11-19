@@ -110,7 +110,27 @@ export const TraceEventPayloads = {
   "run.rolled_back": z.object({ toCheckpoint: CheckpointId }),
   "run.paused": z.object({ reason: z.string().min(1) }),
   "run.resumed": z.object({ afterCrash: z.boolean() }),
-  "run.completed": z.object({ integrationCommit: GitOid }),
+  /** Every node succeeded; their results are being merged and re-verified together. */
+  "integration.started": z.object({ baseCommit: GitOid, branch: z.string().min(1) }),
+  /** All node checks re-run on the merged result (the integration worktree). */
+  "integration.checked": z.object({
+    commit: GitOid,
+    passed: z.boolean(),
+    checks: z.array(
+      z.object({ checkId: z.string().min(1), passed: z.boolean(), outputBlob: Sha256 }),
+    ),
+  }),
+  /** The frontier model's review of the integrated diff. */
+  "review.completed": z.object({
+    verdict: z.enum(["approve", "request_changes"]),
+    summary: z.string(),
+    concerns: z.array(z.string()),
+  }),
+  /** mergedInto is the user's branch when the merge gate was approved, null otherwise. */
+  "run.completed": z.object({
+    integrationCommit: GitOid,
+    mergedInto: z.string().min(1).nullable(),
+  }),
   "run.failed": z.object({ errorClass, message: z.string() }),
   "run.cancelled": z.object({ reason: z.string().min(1) }),
 } as const satisfies Record<string, z.ZodType>;

@@ -707,7 +707,23 @@ export interface TraceEventPayloads {
   "run.rolled_back": { readonly toCheckpoint: CheckpointId };
   "run.paused": { readonly reason: string };
   "run.resumed": { readonly afterCrash: boolean };
-  "run.completed": { readonly integrationCommit: GitOid };
+  "integration.started": { readonly baseCommit: GitOid; readonly branch: string };
+  "integration.checked": {
+    readonly commit: GitOid;
+    readonly passed: boolean;
+    readonly checks: readonly {
+      readonly checkId: string;
+      readonly passed: boolean;
+      readonly outputBlob: Sha256;
+    }[];
+  };
+  "review.completed": {
+    readonly verdict: "approve" | "request_changes";
+    readonly summary: string;
+    readonly concerns: readonly string[];
+  };
+  /** mergedInto is the user's branch when the merge gate was approved, otherwise null. */
+  "run.completed": { readonly integrationCommit: GitOid; readonly mergedInto: string | null };
   "run.failed": { readonly errorClass: string; readonly message: string };
   "run.cancelled": { readonly reason: string };
 }

@@ -302,6 +302,22 @@ CREATE TABLE settings (
 ) STRICT, WITHOUT ROWID;
 ```
 
+## Migration 0002 (run locks)
+
+```sql
+CREATE TABLE run_locks (
+  run_id       TEXT    PRIMARY KEY REFERENCES runs(id),
+  owner        TEXT    NOT NULL,
+  pid          INTEGER NOT NULL,
+  acquired_at  INTEGER NOT NULL,
+  heartbeat_at INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+```
+
+Operational state, not history: which engine process owns a run. Engines heartbeat their lock;
+an expired lock belongs to a crashed engine and may be taken over by `orzeus resume`.
+
 ## memory.db (orzeus-memory MCP server)
 
 ```sql

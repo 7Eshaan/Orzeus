@@ -1,31 +1,45 @@
-import { outOfScope, runChecks } from "@orzeus/checks";
+import { hostname } from "node:os";
+import { type CheckResult, outOfScope, runChecks } from "@orzeus/checks";
 import {
+  CircuitBreakers,
   type Clock,
+  crossedCostThresholds,
   decideAfterFailure,
   decideNext,
   evaluatePolicy,
   type FailureKind,
+  frontierTokensExceeded,
   type NodeState,
   nextWakeAt,
   nodeBudgetTrips,
   type Random,
+  REVIEW_SYSTEM_PROMPT,
   type RunState,
   renderPacketPrompt,
+  renderReviewPrompt,
+  renderSteerPrompt,
+  STEER_SYSTEM_PROMPT,
 } from "@orzeus/core";
 import type { Git, WorktreeManager } from "@orzeus/git";
 import type { GatewayCall, GatewayDecision, McpGateway } from "@orzeus/mcp-gateway";
 import type {
+  AccountContext,
   AdapterEvent,
   AdapterRegistry,
   AgentSession,
+  OutputSchema,
+  ProviderAdapter,
   SessionOutcome,
 } from "@orzeus/providers";
 import {
   type Actor,
   type ApprovalId,
+  type CheckpointId,
+  type CheckSpec,
   ContextPacket,
   type ContextPacketBody,
   type EventDraft,
+  type GateAction,
   type GitOid,
   type ModelRef,
   type NodeId,
@@ -33,17 +47,49 @@ import {
   type PolicyDocument,
   type ProjectId,
   type ProposedAction,
+  ReviewDecision,
   type RunId,
   type Sha256,
+  SteerDecision,
   type TaskNode,
   TERMINAL_RUN_STATUSES,
+  type TraceEvent,
   type TraceEventPayload,
   type TraceEventType,
 } from "@orzeus/schema";
-import { type SqliteRunStore, sha256Text } from "@orzeus/store";
+import { type RunLocks, type SqliteRunStore, sha256Text } from "@orzeus/store";
 import { canonicalize, contentHash } from "@orzeus/trace";
+import { z } from "zod";
 import { randomHex } from "./ids.js";
 import type { Logger } from "./logger.js";
+
+/** A model that can answer with structured output: used for steering and review. */
+export interface FrontierModel {
+  readonly ref: ModelRef;
+  readonly adapter: ProviderAdapter;
+  readonly account: AccountContext;
+}
+
+/** Something only a human may decide. */
+export interface GateRequest {
+  readonly runId: RunId;
+  readonly nodeId: NodeId | null;
+  readonly action: ProposedAction | GateAction;
+  readonly reason: string;
+}
+
+/** The human's answer, and who gave it (a person, or a headless flag acting for them). */
+export interface GateAnswer {
+  readonly approved: boolean;
+  readonly actor: Actor;
+  readonly note?: string;
+}
+
+export interface LockSettings {
+  readonly locks: RunLocks;
+  readonly ttlMs: number;
+  readonly heartbeatMs: number;
+}
 
 export interface OrchestratorOptions {
   readonly store: SqliteRunStore;
@@ -54,12 +100,17 @@ export interface OrchestratorOptions {
   readonly clock: Clock;
   readonly random: Random;
   readonly logger: Logger;
-  /** Headless runs have no human: policy "ask" verdicts are denied unless this is true. */
-  readonly approveAsks: boolean;
+  /** Answers human gates: policy asks, budget thresholds and the merge into the user's branch. */
+  readonly decideGate: (gate: GateRequest) => Promise<GateAnswer>;
+  /** Steers escalated nodes and reviews the integrated result; without it, escalations fail. */
+  readonly frontier?: FrontierModel;
+  /** One engine per run (Phase 4). Without it, nothing stops two engines sharing a run. */
+  readonly lock?: LockSettings;
   /** Human-readable progress lines (the CLI prints them). */
   readonly progress?: (line: string) => void;
   /** Starts a run's MCP gateway with its upstream servers. Without it, workers get no gateway. */
   readonly openGateway?: (state: RunState) => Promise<McpGateway>;
+  readonly breakers?: CircuitBreakers;
 }
 
 /** One planner model call, recorded in the trace when the plan is proposed. */
@@ -70,25 +121,45 @@ export interface PlanningRecord {
   readonly latencyMs: number;
 }
 
+export class RunLockedError extends Error {
+  override readonly name = "RunLockedError";
+}
+
 const ENGINE: Actor = { kind: "engine" };
+const INTEGRATION_WORKTREE = "_integration";
+const ACTIVE_NODE_STATUSES = new Set(["running", "verifying", "awaiting_approval"]);
+
+const steerOutput: OutputSchema<SteerDecision> = {
+  name: "orzeus_steer",
+  jsonSchema: z.toJSONSchema(SteerDecision) as Record<string, unknown>,
+  parse: (v) => SteerDecision.parse(v),
+};
+const reviewOutput: OutputSchema<ReviewDecision> = {
+  name: "orzeus_review",
+  jsonSchema: z.toJSONSchema(ReviewDecision) as Record<string, unknown>,
+  parse: (v) => ReviewDecision.parse(v),
+};
 
 /**
  * Drives runs: turns scheduler decisions into events, runs worker sessions in worktrees,
- * verifies their work, and integrates the result. Every decision is an appended event, so a
- * crash at any point can be resumed from the log (see resume).
- *
- * Phase 2 scope: one engine process per database (leases arrive in Phase 4) and no frontier
- * steering (escalations go to a human, which headless mode reports as a failure).
+ * verifies their work, steers failures through the frontier model, integrates and re-verifies
+ * the result, has it reviewed, and offers the merge. Every decision is an appended event, so a
+ * crash at any point resumes from the log (see resume).
  */
 export class RunOrchestrator {
   readonly #o: OrchestratorOptions;
+  readonly #owner = `${hostname()}-${process.pid}-${randomHex(4)}`;
   readonly #traceIds = new Map<RunId, string>();
   readonly #active = new Map<string, Promise<void>>();
   readonly #gateways = new Map<RunId, Promise<McpGateway | null>>();
+  readonly #breakers: CircuitBreakers;
 
   constructor(options: OrchestratorOptions) {
     this.#o = options;
+    this.#breakers = options.breakers ?? new CircuitBreakers();
   }
+
+  // ───────────────────────── Run creation ─────────────────────────
 
   /** Records a new run with a ready-made (hand-written) plan, awaiting plan approval. */
   createRun(projectId: ProjectId, plan: PlannerOutput): RunId {
@@ -106,19 +177,7 @@ export class RunOrchestrator {
     const { dag, packets } = plan;
     const runId = dag.runId;
     if (planning.length > 0) this.#append(runId, this.#planningDrafts(runId, planning));
-    const issued: EventDraft[] = packets.map((body) => {
-      const packet = this.#sealPacket(body);
-      const blob = this.#o.store.blobs.put(
-        canonicalize(packet),
-        "application/vnd.orzeus.packet+json",
-      );
-      return this.#draft(
-        runId,
-        "packet.issued",
-        { packetId: packet.id, contentHash: packet.contentHash },
-        { nodeId: packet.nodeId, blobs: [blob] },
-      );
-    });
+    const issued = packets.map((body) => this.#issuePacket(runId, this.#sealPacket(body)));
     this.#append(runId, [
       ...issued,
       this.#draft(runId, "plan.proposed", { revision: dag.revision, dag }),
@@ -139,71 +198,121 @@ export class RunOrchestrator {
     ]);
   }
 
-  #planningDrafts(runId: RunId, planning: readonly PlanningRecord[]): EventDraft[] {
-    return planning.map((c) =>
-      this.#draft(
-        runId,
-        "model.call",
-        {
-          model: c.model,
-          tier: "frontier",
-          purpose: "plan",
-          usage: c.usage,
-          costMicroUsd: c.costMicroUsd,
-          latencyMs: c.latencyMs,
-        },
-        { actor: { kind: "model", model: c.model, tier: "frontier" } },
-      ),
-    );
-  }
-
   approvePlan(runId: RunId, edited = false): void {
     const state = this.#state(runId);
     const revision = state.proposedDag?.revision;
     if (revision === undefined) throw new Error("no plan is waiting for approval");
     this.#append(runId, [
       this.#draft(runId, "plan.approved", { revision, edited }, { actor: { kind: "human" } }),
+      this.#checkpointDraft(runId, this.#state(runId), "plan approved"),
     ]);
   }
 
+  // ───────────────────────── Execution ─────────────────────────
+
   /**
-   * Recovers a run after a crash: pending approvals of interrupted nodes are closed and the
-   * interrupted attempts are rescheduled immediately; then execution continues.
+   * Recovers a run after a crash or pause: pending approvals of interrupted nodes are closed,
+   * interrupted attempts are rescheduled immediately, and execution continues where it stopped
+   * (including mid-integration).
    */
   async resume(runId: RunId): Promise<RunState> {
-    const state = this.#state(runId);
-    if (TERMINAL_RUN_STATUSES.has(state.status)) return state;
-    const drafts: EventDraft[] = [this.#draft(runId, "run.resumed", { afterCrash: true })];
-    for (const node of Object.values(state.nodes)) {
-      if (!["running", "verifying", "awaiting_approval"].includes(node.status)) continue;
-      for (const approval of Object.values(state.approvals)) {
-        if (approval.nodeId === node.id && approval.status === "pending") {
-          drafts.push(
-            this.#draft(runId, "approval.resolved", {
-              approvalId: approval.id,
-              decision: { kind: "deny", reason: "Interrupted by an engine restart." },
-            }),
-          );
+    return this.#withLock(runId, async () => {
+      const state = this.#state(runId);
+      if (TERMINAL_RUN_STATUSES.has(state.status)) return state;
+      const drafts: EventDraft[] = [
+        this.#draft(runId, "run.resumed", { afterCrash: state.status !== "paused" }),
+      ];
+      for (const node of Object.values(state.nodes)) {
+        if (!ACTIVE_NODE_STATUSES.has(node.status)) continue;
+        for (const approval of Object.values(state.approvals)) {
+          if (approval.nodeId === node.id && approval.status === "pending") {
+            drafts.push(
+              this.#draft(runId, "approval.resolved", {
+                approvalId: approval.id,
+                decision: { kind: "deny", reason: "Interrupted by an engine restart." },
+              }),
+            );
+          }
         }
+        drafts.push(
+          this.#draft(
+            runId,
+            "node.retry_scheduled",
+            {
+              nextAttempt: node.attempt + 1,
+              delayMs: 0,
+              reason: "interrupted by an engine restart",
+            },
+            { nodeId: node.id, attempt: node.attempt },
+          ),
+        );
+        this.#say(`${node.id}: attempt ${node.attempt} was interrupted; retrying.`);
       }
-      drafts.push(
-        this.#draft(
-          runId,
-          "node.retry_scheduled",
-          { nextAttempt: node.attempt + 1, delayMs: 0, reason: "interrupted by an engine restart" },
-          { nodeId: node.id, attempt: node.attempt },
-        ),
-      );
-      this.#say(`${node.id}: attempt ${node.attempt} was interrupted; retrying.`);
-    }
-    this.#append(runId, drafts);
-    return this.execute(runId);
+      this.#append(runId, drafts);
+      return this.#run(runId);
+    });
   }
 
-  /** Runs the approved plan until it settles. */
+  /** Runs the approved plan until it settles, pauses or needs a human. */
   async execute(runId: RunId): Promise<RunState> {
+    return this.#withLock(runId, () => this.#run(runId));
+  }
+
+  /** Rolls a run back to a checkpoint. Only call it on a human's explicit request: it discards later work. */
+  async rollback(
+    runId: RunId,
+    checkpointId: CheckpointId,
+    actor: Actor = { kind: "human" },
+  ): Promise<RunState> {
+    return this.#withLock(runId, async () => {
+      const state = this.#state(runId);
+      const checkpoint = state.checkpoints[checkpointId];
+      if (checkpoint === undefined) throw new Error(`unknown checkpoint ${checkpointId}`);
+      // The caller is the human's decision (e.g. `orzeus rollback`), recorded as the event's actor.
+      this.#append(runId, [
+        this.#draft(runId, "run.rolled_back", { toCheckpoint: checkpointId }, { actor }),
+      ]);
+      this.#say(`Run ${runId}: rolled back to "${checkpoint.label}".`);
+      return this.#state(runId);
+    });
+  }
+
+  async #withLock<T>(runId: RunId, work: () => Promise<T>): Promise<T> {
+    const settings = this.#o.lock;
+    if (settings === undefined) return this.#withGateway(runId, work);
+    let acquired = settings.locks.acquire(runId, this.#owner, process.pid, settings.ttlMs);
+    if (!acquired.ok) {
+      // A crashed engine's lock expires on its own; wait for that rather than failing.
+      const wait = acquired.heldBy.expiresAt - this.#o.clock.now() + 50;
+      if (wait > 0 && wait <= settings.ttlMs + 100) {
+        this.#say(
+          `Run ${runId} is locked by ${acquired.heldBy.owner}; waiting ${Math.ceil(wait / 1000)}s for it to expire.`,
+        );
+        await new Promise((r) => setTimeout(r, wait));
+        acquired = settings.locks.acquire(runId, this.#owner, process.pid, settings.ttlMs);
+      }
+      if (!acquired.ok) {
+        throw new RunLockedError(
+          `run ${runId} is being run by another engine (${acquired.heldBy.owner}, pid ${acquired.heldBy.pid})`,
+        );
+      }
+    }
+    const beat = setInterval(() => {
+      if (!settings.locks.heartbeat(runId, this.#owner, settings.ttlMs)) {
+        this.#o.logger.log("error", "lost run lock", { runId });
+      }
+    }, settings.heartbeatMs);
     try {
-      return await this.#execute(runId);
+      return await this.#withGateway(runId, work);
+    } finally {
+      clearInterval(beat);
+      settings.locks.release(runId, this.#owner);
+    }
+  }
+
+  async #withGateway<T>(runId: RunId, work: () => Promise<T>): Promise<T> {
+    try {
+      return await work();
     } finally {
       const gateway = this.#gateways.get(runId);
       this.#gateways.delete(runId);
@@ -211,17 +320,46 @@ export class RunOrchestrator {
     }
   }
 
-  async #execute(runId: RunId): Promise<RunState> {
+  async #run(runId: RunId): Promise<RunState> {
     for (;;) {
       const state = this.#state(runId);
       if (TERMINAL_RUN_STATUSES.has(state.status)) return state;
+      if (state.status === "paused") {
+        await Promise.all(this.#active.values());
+        return this.#state(runId);
+      }
+      if (
+        state.status === "integrating" ||
+        state.status === "reviewing" ||
+        state.status === "awaiting_merge_approval"
+      ) {
+        return this.#finish(runId);
+      }
       if (state.status !== "executing") throw new Error(`run is ${state.status}, not executing`);
 
-      const actions = decideNext(state, this.#o.clock.now());
+      const now = this.#o.clock.now();
+      const actions = decideNext(this.#withInFlight(state), now);
       const settled = actions.find((a) => a.kind === "settled");
       if (settled !== undefined) {
         await Promise.all(this.#active.values());
-        return this.#settle(runId, settled.allSucceeded);
+        if (!settled.allSucceeded) {
+          this.#say(`Run ${runId} failed: not every node succeeded.`);
+          return this.#append(runId, [
+            this.#draft(runId, "run.failed", {
+              errorClass: "run.nodes_failed",
+              message: "Not every node succeeded.",
+            }),
+          ]);
+        }
+        const dag = state.dag;
+        if (dag === null) throw new Error("run has no plan");
+        this.#append(runId, [
+          this.#draft(runId, "integration.started", {
+            baseCommit: dag.repo.baseCommit,
+            branch: dag.integration.branch,
+          }),
+        ]);
+        continue;
       }
 
       const drafts: EventDraft[] = [];
@@ -243,27 +381,43 @@ export class RunOrchestrator {
       if (drafts.length > 0) this.#append(runId, drafts);
 
       let started = 0;
+      let breakerWake: number | null = null;
       for (const action of actions) {
         // A node stays "ready" until its attempt records node.dispatched, so skip ones in flight.
         if (action.kind !== "dispatch" || this.#active.has(action.nodeId)) continue;
-        const task = this.#attempt(runId, action.nodeId).finally(() =>
-          this.#active.delete(action.nodeId),
-        );
-        this.#active.set(action.nodeId, task);
+        const task = state.dag?.nodes.find((n) => n.id === action.nodeId);
+        const blockedUntil = task === undefined ? null : this.#blockedUntil(task, now);
+        if (blockedUntil !== null) {
+          breakerWake = breakerWake === null ? blockedUntil : Math.min(breakerWake, blockedUntil);
+          continue;
+        }
+        this.#track(action.nodeId, this.#attempt(runId, action.nodeId));
         started++;
       }
+      for (const node of Object.values(this.#state(runId).nodes)) {
+        if (node.status === "escalated" && !this.#active.has(node.id)) {
+          this.#track(node.id, this.#steer(runId, node.id));
+          started++;
+        }
+      }
       if (started > 0) {
-        // Let the new attempts reach their first await before scheduling again.
+        // Let the new tasks reach their first await before scheduling again.
         await Promise.resolve();
         continue;
       }
 
+      const retryWake = nextWakeAt(this.#state(runId));
+      const wake = [retryWake, breakerWake]
+        .filter((w): w is number => w !== null)
+        .reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
       if (this.#active.size > 0) {
-        await Promise.race(this.#active.values());
+        const timer = Number.isFinite(wake)
+          ? new Promise((r) => setTimeout(r, Math.max(0, wake - this.#o.clock.now())))
+          : null;
+        await Promise.race([...this.#active.values(), ...(timer === null ? [] : [timer])]);
         continue;
       }
-      const wake = nextWakeAt(this.#state(runId));
-      if (wake !== null) {
+      if (Number.isFinite(wake)) {
         await new Promise((r) => setTimeout(r, Math.max(0, wake - this.#o.clock.now())));
         continue;
       }
@@ -272,47 +426,38 @@ export class RunOrchestrator {
     }
   }
 
-  async #settle(runId: RunId, allSucceeded: boolean): Promise<RunState> {
-    const state = this.#state(runId);
-    if (!allSucceeded) {
-      this.#say(`Run ${runId} failed: not every node succeeded.`);
-      return this.#append(runId, [
-        this.#draft(runId, "run.failed", {
-          errorClass: "run.nodes_failed",
-          message: "Not every node succeeded.",
-        }),
-      ]);
+  /**
+   * The scheduler's view of the run: a node whose attempt has started but not yet recorded
+   * node.dispatched (it is preparing its worktree) already holds a slot and its write scope.
+   */
+  #withInFlight(state: RunState): RunState {
+    const starting = [...this.#active.keys()].filter((id) => state.nodes[id]?.status === "ready");
+    if (starting.length === 0) return state;
+    const nodes = { ...state.nodes };
+    for (const id of starting) {
+      const node = nodes[id];
+      if (node !== undefined) nodes[id] = { ...node, status: "running" };
     }
-    const dag = state.dag;
-    if (dag === null) throw new Error("run has no plan");
-    const heads = state.nodeOrder
-      .map((id) => state.nodes[id]?.headCommit)
-      .filter((c): c is GitOid => c !== null && c !== undefined);
-    const merged = await this.#o.git.mergeAll(
-      dag.repo.root,
-      dag.repo.baseCommit,
-      heads,
-      (head) => `Orzeus: integrate ${head.slice(0, 12)}\n\nOrzeus-Run: ${runId}\n`,
-    );
-    if (!merged.ok) {
-      this.#say(
-        `Run ${runId} failed: integrating ${merged.with.slice(0, 12)} conflicts in ${merged.conflicts.join(", ")}.`,
-      );
-      return this.#append(runId, [
-        this.#draft(runId, "run.failed", {
-          errorClass: "integration.conflict",
-          message: `Conflicts in ${merged.conflicts.join(", ")}`,
-        }),
-      ]);
-    }
-    await this.#o.git.updateBranch(dag.repo.root, dag.integration.branch, merged.commit);
-    this.#say(
-      `Run ${runId} completed. Integrated result is on branch ${dag.integration.branch} (${merged.commit.slice(0, 12)}).`,
-    );
-    return this.#append(runId, [
-      this.#draft(runId, "run.completed", { integrationCommit: merged.commit }),
-    ]);
+    return { ...state, nodes };
   }
+
+  #track(key: string, task: Promise<void>): void {
+    this.#active.set(
+      key,
+      task.finally(() => this.#active.delete(key)),
+    );
+  }
+
+  /** When every candidate adapter's circuit breaker is open: the earliest time one reopens. */
+  #blockedUntil(task: TaskNode, now: number): number | null {
+    const candidates = task.candidates.filter((c) => this.#o.adapters.get(c.adapter) !== undefined);
+    if (candidates.length === 0) return null; // routing failure is reported by the attempt
+    if (candidates.some((c) => this.#breakers.allows(c.adapter, now))) return null;
+    const times = candidates.map((c) => this.#breakers.retryAt(c.adapter) ?? now);
+    return Math.min(...times);
+  }
+
+  // ───────────────────────── Attempts ─────────────────────────
 
   async #attempt(runId: RunId, nodeId: NodeId): Promise<void> {
     try {
@@ -339,7 +484,9 @@ export class RunOrchestrator {
     const task = dag?.nodes.find((n) => n.id === nodeId);
     if (dag === null || task === undefined) throw new Error(`unknown node ${nodeId}`);
 
-    const pick = this.#o.adapters.pick(task.candidates);
+    const now = this.#o.clock.now();
+    const allowed = task.candidates.filter((c) => this.#breakers.allows(c.adapter, now));
+    const pick = this.#o.adapters.pick(allowed);
     if (pick === null) {
       this.#fail(
         runId,
@@ -424,6 +571,7 @@ export class RunOrchestrator {
     } finally {
       if (token !== null) gateway?.revoke(token);
     }
+
     if (outcome.status !== "completed") {
       const kind: FailureKind =
         outcome.status === "budget_exceeded"
@@ -431,17 +579,14 @@ export class RunOrchestrator {
           : outcome.status === "needs_input"
             ? "ambiguity"
             : "transient";
+      const errorClass = outcome.errorClass ?? `worker.${outcome.status}`;
+      if (kind === "transient")
+        this.#breakers.recordFailure(pick.model.adapter, errorClass, this.#o.clock.now());
       this.#say(`${nodeId}: attempt ${attempt} ended ${outcome.status}: ${outcome.summary}`);
-      this.#afterFailure(
-        runId,
-        nodeId,
-        task,
-        kind,
-        outcome.summary,
-        outcome.errorClass ?? `worker.${outcome.status}`,
-      );
+      this.#afterFailure(runId, nodeId, task, kind, outcome.summary, errorClass);
       return;
     }
+    this.#breakers.recordSuccess(pick.model.adapter);
 
     const snapshot = await this.#o.git.snapshot(
       worktree.path,
@@ -473,24 +618,7 @@ export class RunOrchestrator {
       changedPaths: changed,
       writeScope: task.writeScope,
     });
-    this.#append(
-      runId,
-      results.map((r) => {
-        const outputBlob = this.#o.store.blobs.put(r.output, "text/plain");
-        return this.#draft(
-          runId,
-          "check.completed",
-          {
-            checkId: r.checkId,
-            passed: r.passed,
-            exitCode: r.exitCode,
-            outputBlob,
-            durationMs: r.durationMs,
-          },
-          { nodeId, attempt, blobs: [outputBlob] },
-        );
-      }),
-    );
+    this.#append(runId, this.#checkDrafts(runId, results, { nodeId, attempt }));
 
     const failed = results.filter((r) => !r.passed);
     if (failed.length === 0) {
@@ -501,6 +629,9 @@ export class RunOrchestrator {
           { headCommit: snapshot.commit, summary: outcome.summary },
           { nodeId, attempt },
         ),
+      ]);
+      this.#append(runId, [
+        this.#checkpointDraft(runId, this.#state(runId), `${nodeId} succeeded`),
       ]);
       this.#say(
         `${nodeId}: succeeded (${diff.files.length} files, +${diff.insertions} -${diff.deletions}).`,
@@ -516,9 +647,31 @@ export class RunOrchestrator {
       failed
         .map((r) => r.output)
         .join("\n\n")
-        .slice(0, 2_000),
+        .slice(0, 4_000),
       "checks.failed",
     );
+  }
+
+  #checkDrafts(
+    runId: RunId,
+    results: readonly CheckResult[],
+    at: { nodeId: NodeId | null; attempt: number | null },
+  ): EventDraft[] {
+    return results.map((r) => {
+      const outputBlob = this.#o.store.blobs.put(r.output, "text/plain");
+      return this.#draft(
+        runId,
+        "check.completed",
+        {
+          checkId: r.checkId,
+          passed: r.passed,
+          exitCode: r.exitCode,
+          outputBlob,
+          durationMs: r.durationMs,
+        },
+        { ...at, blobs: [outputBlob] },
+      );
+    });
   }
 
   /** Consumes session events: usage, tool calls, quota, and policy decisions on approvals. */
@@ -531,7 +684,7 @@ export class RunOrchestrator {
   ): Promise<SessionOutcome> {
     const at = { nodeId, attempt };
     const toolStarts = new Map<string, { tool: string; argsHash: Sha256; started: number }>();
-    const decisions = new Map<string, "auto_allowed" | "approved" | "denied">();
+    const decisions = new Map<string, GatewayDecision>();
     let lastCall = this.#o.clock.now();
     let turns = 0;
     let tripped = false;
@@ -548,7 +701,7 @@ export class RunOrchestrator {
             limitValue: task.budget.maxWallMs,
             observed: this.#o.clock.now() - started,
           },
-          { ...at },
+          at,
         ),
       ]);
       void session.cancel("wall-time budget exceeded");
@@ -562,21 +715,14 @@ export class RunOrchestrator {
             const now = this.#o.clock.now();
             const model = this.#state(runId).nodes[nodeId]?.model;
             if (model === null || model === undefined) break;
-            this.#append(runId, [
-              this.#draft(
-                runId,
-                "model.call",
-                {
-                  model,
-                  tier: task.tier,
-                  purpose: "work",
-                  usage: event.usage,
-                  costMicroUsd: event.costMicroUsd,
-                  latencyMs: now - lastCall,
-                },
-                at,
-              ),
-            ]);
+            await this.#recordModelCall(runId, at, {
+              model,
+              tier: task.tier,
+              purpose: "work",
+              usage: event.usage,
+              costMicroUsd: event.costMicroUsd,
+              latencyMs: now - lastCall,
+            });
             lastCall = now;
             const node = this.#state(runId).nodes[nodeId];
             const trips =
@@ -663,13 +809,58 @@ export class RunOrchestrator {
     }
   }
 
+  /** Appends a model call and enforces run-level budgets (cost thresholds, frontier tokens). */
+  async #recordModelCall(
+    runId: RunId,
+    at: { nodeId: NodeId | null; attempt: number | null },
+    call: TraceEventPayload<"model.call">,
+    actor?: Actor,
+  ): Promise<void> {
+    const before = this.#state(runId);
+    const after = this.#append(runId, [
+      this.#draft(runId, "model.call", call, { ...at, ...(actor === undefined ? {} : { actor }) }),
+    ]);
+    const dag = after.dag;
+    if (dag === null || after.status !== "executing") return;
+    for (const fraction of crossedCostThresholds(dag.budget, before.totals, after.totals)) {
+      const exhausted = fraction >= 1;
+      const answer = exhausted
+        ? null
+        : await this.#gate(
+            runId,
+            null,
+            { kind: "budget_threshold", fraction },
+            `Spend crossed ${Math.round(fraction * 100)}% of the run budget.`,
+          );
+      if (answer === null || !answer.approved) {
+        this.#pause(
+          runId,
+          exhausted
+            ? "Run cost budget exhausted."
+            : `Spending past ${Math.round(fraction * 100)}% of the budget was not approved.`,
+        );
+        return;
+      }
+    }
+    if (frontierTokensExceeded(dag.budget, after.totals))
+      this.#pause(runId, "Frontier token budget exhausted.");
+  }
+
+  #pause(runId: RunId, reason: string): void {
+    if (this.#state(runId).status !== "executing") return;
+    this.#append(runId, [this.#draft(runId, "run.paused", { reason })]);
+    this.#say(`Run ${runId} paused: ${reason} Resume with: orzeus resume ${runId}`);
+  }
+
+  // ───────────────────────── Policy and gates ─────────────────────────
+
   async #decide(
     runId: RunId,
     at: { nodeId: NodeId; attempt: number },
     task: TaskNode,
     session: AgentSession,
     event: Extract<AdapterEvent, { type: "approval_request" }>,
-  ): Promise<"auto_allowed" | "approved" | "denied"> {
+  ): Promise<GatewayDecision> {
     const packet = this.#packetFor(runId, this.#state(runId), task);
     const verdict = evaluatePolicy(this.#o.policy, event.action, {
       writeScope: task.writeScope,
@@ -685,50 +876,49 @@ export class RunOrchestrator {
       this.#say(`${at.nodeId}: denied ${event.action.kind} (${verdict.ruleId}).`);
       return "denied";
     }
-    const approved = this.#askHuman(runId, at, event.action, verdict.ruleId);
+    const answer = await this.#gate(
+      runId,
+      at,
+      event.action,
+      `${verdict.reason} (${verdict.ruleId})`,
+    );
     await session.respond(
       event.requestId,
-      approved
+      answer.approved
         ? { kind: "allow_once" }
-        : { kind: "deny", reason: "A human gate was not approved." },
+        : { kind: "deny", reason: answer.note ?? "A human gate was not approved." },
     );
-    return approved ? "approved" : "denied";
+    return answer.approved ? "approved" : "denied";
   }
 
-  /**
-   * A human gate. Headless runs have no human, so the policy actor decides (deny, unless the
-   * run allows asks), and both the request and the decision are recorded.
-   */
-  #askHuman(
+  /** Asks the human (through decideGate) and records the request and the answer. */
+  async #gate(
     runId: RunId,
-    at: { nodeId: NodeId; attempt: number },
-    action: ProposedAction,
-    ruleId: string,
-  ): boolean {
+    at: { nodeId: NodeId; attempt: number } | null,
+    action: ProposedAction | GateAction,
+    reason: string,
+  ): Promise<GateAnswer> {
     const approvalId = `ap-${randomHex(8)}` as ApprovalId;
-    const decision = this.#o.approveAsks
-      ? ({ kind: "allow_once" } as const)
-      : ({
-          kind: "deny",
-          reason: "No human is available in headless mode (run with --approve-asks to allow).",
-        } as const);
-    const policyActor: Actor = {
-      kind: "policy",
-      ruleId: this.#o.approveAsks ? "headless_approve_asks" : "headless_deny_asks",
-    };
+    const where = at ?? { nodeId: null, attempt: null };
+    this.#append(runId, [this.#draft(runId, "approval.requested", { approvalId, action }, where)]);
+    const answer = await this.#o.decideGate({ runId, nodeId: at?.nodeId ?? null, action, reason });
     this.#append(runId, [
-      this.#draft(runId, "approval.requested", { approvalId, action }, at),
       this.#draft(
         runId,
         "approval.resolved",
-        { approvalId, decision },
-        { ...at, actor: policyActor },
+        {
+          approvalId,
+          decision: answer.approved
+            ? { kind: "allow_once" }
+            : { kind: "deny", reason: answer.note ?? "Not approved." },
+        },
+        { ...where, actor: answer.actor },
       ),
     ]);
     this.#say(
-      `${at.nodeId}: ${decision.kind === "allow_once" ? "approved" : "denied"} ${action.kind} needing a human (${ruleId}).`,
+      `${at?.nodeId ?? "run"}: ${answer.approved ? "approved" : "denied"} ${action.kind} (${reason}).`,
     );
-    return decision.kind === "allow_once";
+    return answer;
   }
 
   /** Policy for upstream MCP calls made through the gateway. */
@@ -752,7 +942,9 @@ export class RunOrchestrator {
     });
     if (verdict.effect === "allow") return "auto_allowed";
     if (verdict.effect === "deny") return "denied";
-    return this.#askHuman(runId, at, action, verdict.ruleId) ? "approved" : "denied";
+    return (await this.#gate(runId, at, action, `${verdict.reason} (${verdict.ruleId})`)).approved
+      ? "approved"
+      : "denied";
   }
 
   /** Every gateway call becomes a tool.call event; arguments and result go to the blob store. */
@@ -798,6 +990,8 @@ export class RunOrchestrator {
     return gateway;
   }
 
+  // ───────────────────────── Failure, escalation, steering ─────────────────────────
+
   #afterFailure(
     runId: RunId,
     nodeId: NodeId,
@@ -823,18 +1017,11 @@ export class RunOrchestrator {
         this.#say(`${nodeId}: retrying in ${Math.round(decision.delayMs / 1000)}s (${kind}).`);
         return;
       case "escalate":
+        // The scheduler loop picks up escalated nodes and steers them (also after a crash).
         this.#append(runId, [
           this.#draft(runId, "node.escalated", { reason: decision.reason }, at),
-          this.#draft(
-            runId,
-            "node.failed",
-            {
-              errorClass: "escalation.unavailable",
-              message: `Needs frontier steering (${decision.reason}), which arrives in Phase 3.`,
-            },
-            at,
-          ),
         ]);
+        this.#say(`${nodeId}: escalated to the frontier model (${decision.reason}).`);
         return;
       case "ask_human":
         this.#fail(
@@ -850,6 +1037,129 @@ export class RunOrchestrator {
     }
   }
 
+  /**
+   * Asks the frontier model what to do with an escalated node, sending only the packet, the
+   * last diff and the failing output.
+   */
+  async #steer(runId: RunId, nodeId: NodeId): Promise<void> {
+    const state = this.#state(runId);
+    const node = state.nodes[nodeId];
+    const task = state.dag?.nodes.find((n) => n.id === nodeId);
+    const frontier = this.#o.frontier;
+    if (node === undefined || task === undefined) return;
+    if (frontier?.adapter.generate === undefined) {
+      this.#fail(
+        runId,
+        nodeId,
+        "escalation.unavailable",
+        "Needs frontier steering, but no frontier model is configured.",
+      );
+      return;
+    }
+    try {
+      const events = this.#o.store.events(runId);
+      const last = <K extends TraceEventType>(type: K) =>
+        events
+          .filter(
+            (e): e is Extract<TraceEvent, { type: K }> =>
+              e.type === type && e.nodeId === nodeId && e.attempt === node.attempt,
+          )
+          .at(-1);
+      const diffEvent = last("diff.captured");
+      const diff =
+        diffEvent === undefined ? "" : this.#blobText(diffEvent.payload.diffBlob, 12_000);
+      const failures = events
+        .filter(
+          (e): e is Extract<TraceEvent, { type: "check.completed" }> =>
+            e.type === "check.completed" &&
+            e.nodeId === nodeId &&
+            e.attempt === node.attempt &&
+            !e.payload.passed,
+        )
+        .map((e) => this.#blobText(e.payload.outputBlob, 4_000))
+        .join("\n\n");
+      const reason = events
+        .filter((e) => e.type === "node.escalated" && e.nodeId === nodeId)
+        .at(-1);
+      const packet = this.#packetFor(runId, state, task);
+      const adapter = frontier.adapter as Required<Pick<ProviderAdapter, "generate">>;
+      const result = await adapter.generate<SteerDecision>(
+        {
+          model: frontier.ref.model,
+          system: STEER_SYSTEM_PROMPT,
+          prompt: renderSteerPrompt({
+            packet,
+            reason: reason?.type === "node.escalated" ? reason.payload.reason : "escalated",
+            attempt: node.attempt,
+            diff,
+            failures,
+            workerSummary: node.summary ?? node.lastError?.message ?? "",
+          }),
+          output: steerOutput,
+          maxOutputTokens: 4_000,
+        },
+        frontier.account,
+        AbortSignal.timeout(300_000),
+      );
+      await this.#recordModelCall(
+        runId,
+        { nodeId, attempt: node.attempt },
+        {
+          model: frontier.ref,
+          tier: "frontier",
+          purpose: "steer",
+          usage: result.usage,
+          costMicroUsd: result.costMicroUsd,
+          latencyMs: result.latencyMs,
+        },
+        { kind: "model", model: frontier.ref, tier: "frontier" },
+      );
+      const decision = result.value;
+      const actor: Actor = { kind: "model", model: frontier.ref, tier: "frontier" };
+      if (decision.action === "give_up") {
+        this.#fail(runId, nodeId, "steer.gave_up", decision.note);
+        return;
+      }
+      const drafts: EventDraft[] = [];
+      if (decision.action === "rewrite_task" && decision.revisedObjective !== null) {
+        const { contentHash: _old, ...body } = this.#plannedPacket(runId, nodeId);
+        drafts.push(
+          this.#issuePacket(
+            runId,
+            this.#sealPacket({
+              ...body,
+              objective: decision.revisedObjective,
+              constraints: decision.revisedConstraints.map((text, i) => ({
+                id: `s-${i + 1}`,
+                text,
+                source: "planner" as const,
+              })),
+            }),
+          ),
+        );
+      }
+      drafts.push(
+        this.#draft(
+          runId,
+          "node.steered",
+          { note: decision.note, replan: decision.action === "rewrite_task" },
+          { nodeId, actor },
+        ),
+      );
+      this.#append(runId, drafts);
+      this.#say(`${nodeId}: steered (${decision.action}): ${decision.note}`);
+    } catch (error) {
+      const current = this.#state(runId).nodes[nodeId];
+      if (current?.status === "escalated")
+        this.#fail(
+          runId,
+          nodeId,
+          "steer.failed",
+          error instanceof Error ? error.message : String(error),
+        );
+    }
+  }
+
   #fail(runId: RunId, nodeId: NodeId, errorClass: string, message: string): void {
     const node = this.#state(runId).nodes[nodeId];
     this.#append(runId, [
@@ -862,6 +1172,183 @@ export class RunOrchestrator {
     ]);
     this.#say(`${nodeId}: failed (${errorClass}): ${message.split("\n")[0] ?? ""}`);
   }
+
+  // ───────────────────────── Integration, review, merge ─────────────────────────
+
+  /**
+   * Continues a run whose nodes all succeeded, from whichever step it reached: merge and re-run
+   * every check on the combined result, frontier review, then the merge gate.
+   */
+  async #finish(runId: RunId): Promise<RunState> {
+    let state = this.#state(runId);
+    const dag = state.dag;
+    if (dag === null) throw new Error("run has no plan");
+    if (state.status === "integrating") {
+      const heads = state.nodeOrder
+        .map((id) => state.nodes[id]?.headCommit)
+        .filter((c): c is GitOid => c !== null && c !== undefined);
+      const merged = await this.#o.git.mergeAll(
+        dag.repo.root,
+        dag.repo.baseCommit,
+        heads,
+        (h) => `Orzeus: integrate ${h.slice(0, 12)}\n\nOrzeus-Run: ${runId}\n`,
+      );
+      if (!merged.ok) {
+        this.#say(
+          `Run ${runId} failed: integrating ${merged.with.slice(0, 12)} conflicts in ${merged.conflicts.join(", ")}.`,
+        );
+        return this.#append(runId, [
+          this.#draft(runId, "run.failed", {
+            errorClass: "integration.conflict",
+            message: `Conflicts in ${merged.conflicts.join(", ")}`,
+          }),
+        ]);
+      }
+      const worktree = await this.#o.worktrees.prepare(
+        dag.repo.root,
+        runId,
+        INTEGRATION_WORKTREE,
+        merged.commit,
+      );
+      const checks = integrationChecks(dag.nodes, dag.integration.globalChecks);
+      this.#say(`Run ${runId}: re-running ${checks.length} checks on the integrated result.`);
+      const results = await runChecks(checks, {
+        worktree: worktree.path,
+        changedPaths: [],
+        writeScope: ["**"],
+      });
+      const recorded = results.map((r) => ({
+        checkId: r.checkId,
+        passed: r.passed,
+        outputBlob: this.#o.store.blobs.put(r.output, "text/plain"),
+      }));
+      const passed = results.every((r) => r.passed);
+      state = this.#append(runId, [
+        this.#draft(
+          runId,
+          "integration.checked",
+          { commit: merged.commit, passed, checks: recorded },
+          { blobs: recorded.map((r) => r.outputBlob) },
+        ),
+      ]);
+      if (!passed) {
+        const failing = results.filter((r) => !r.passed).map((r) => r.label);
+        this.#say(`Run ${runId} failed: the integrated result fails ${failing.join(", ")}.`);
+        return this.#append(runId, [
+          this.#draft(runId, "run.failed", {
+            errorClass: "integration.checks_failed",
+            message: `Failing after integration: ${failing.join(", ")}`,
+          }),
+        ]);
+      }
+      await this.#o.git.updateBranch(dag.repo.root, dag.integration.branch, merged.commit);
+    }
+
+    const checked = this.#o.store
+      .events(runId)
+      .filter((e) => e.type === "integration.checked")
+      .at(-1);
+    if (checked?.type !== "integration.checked") throw new Error("integration result missing");
+    const commit = checked.payload.commit;
+
+    if (state.status === "reviewing") {
+      const reviewed = await this.#review(runId, commit);
+      if (reviewed === "rejected") return this.#state(runId);
+      state = this.#state(runId);
+    }
+
+    return this.#merge(runId, commit);
+  }
+
+  async #review(runId: RunId, commit: GitOid): Promise<"approved" | "rejected" | "skipped"> {
+    const state = this.#state(runId);
+    const dag = state.dag;
+    const frontier = this.#o.frontier;
+    if (dag === null || !dag.integration.frontierReview || frontier?.adapter.generate === undefined)
+      return "skipped";
+    const diff = await this.#o.git.diff(dag.repo.root, dag.repo.baseCommit, commit);
+    const adapter = frontier.adapter as Required<Pick<ProviderAdapter, "generate">>;
+    const result = await adapter.generate<ReviewDecision>(
+      {
+        model: frontier.ref.model,
+        system: REVIEW_SYSTEM_PROMPT,
+        prompt: renderReviewPrompt({
+          goal: state.goal,
+          diff: diff.patch.slice(0, 40_000),
+          summaries: state.nodeOrder.map((id) => `${id}: ${state.nodes[id]?.summary ?? ""}`),
+        }),
+        output: reviewOutput,
+        maxOutputTokens: 4_000,
+      },
+      frontier.account,
+      AbortSignal.timeout(300_000),
+    );
+    const actor: Actor = { kind: "model", model: frontier.ref, tier: "frontier" };
+    this.#append(runId, [
+      this.#draft(
+        runId,
+        "model.call",
+        {
+          model: frontier.ref,
+          tier: "frontier",
+          purpose: "review",
+          usage: result.usage,
+          costMicroUsd: result.costMicroUsd,
+          latencyMs: result.latencyMs,
+        },
+        { actor },
+      ),
+      this.#draft(runId, "review.completed", result.value, { actor }),
+    ]);
+    if (result.value.verdict === "approve") {
+      this.#say(`Review approved: ${result.value.summary}`);
+      return "approved";
+    }
+    this.#say(`Review requested changes: ${result.value.concerns.join("; ")}`);
+    this.#append(runId, [
+      this.#draft(runId, "run.failed", {
+        errorClass: "review.rejected",
+        message: result.value.concerns.join("\n").slice(0, 2_000) || result.value.summary,
+      }),
+    ]);
+    return "rejected";
+  }
+
+  /** The merge gate: offers to fast-forward the user's branch to the integrated result. */
+  async #merge(runId: RunId, commit: GitOid): Promise<RunState> {
+    const state = this.#state(runId);
+    const dag = state.dag;
+    if (dag === null) throw new Error("run has no plan");
+    const repo = dag.repo.root;
+    const branch =
+      dag.repo.baseRef === "HEAD" ? await this.#o.git.currentBranch(repo) : dag.repo.baseRef;
+    let mergedInto: string | null = null;
+    if (branch !== null && (await this.#o.git.branchExists(repo, branch))) {
+      const answer = await this.#gate(
+        runId,
+        null,
+        { kind: "merge", from: dag.integration.branch, into: branch },
+        `Fast-forward ${branch} to the integrated result.`,
+      );
+      if (answer.approved) {
+        const result = await this.#o.git.fastForward(repo, branch, dag.repo.baseCommit, commit);
+        if (result.ok) {
+          mergedInto = branch;
+          this.#say(`Merged into ${branch}.`);
+        } else {
+          this.#say(`Not merged: ${result.reason}. The result stays on ${dag.integration.branch}.`);
+        }
+      }
+    }
+    this.#say(
+      `Run ${runId} completed. Integrated result is on branch ${dag.integration.branch} (${commit.slice(0, 12)}).`,
+    );
+    return this.#append(runId, [
+      this.#draft(runId, "run.completed", { integrationCommit: commit, mergedInto }),
+    ]);
+  }
+
+  // ───────────────────────── Packets, checkpoints, helpers ─────────────────────────
 
   /** Base commit for a node: the run's base, or its dependencies' results merged together. */
   async #baseFor(
@@ -882,15 +1369,21 @@ export class RunOrchestrator {
     );
   }
 
-  /** The node's packet with upstream results filled in from its dependencies. */
-  #packetFor(runId: RunId, state: RunState, task: TaskNode): ContextPacket {
+  /** The node's latest issued packet (re-issued when steering rewrites the task). */
+  #plannedPacket(runId: RunId, nodeId: NodeId): ContextPacket {
     const issued = this.#o.store
       .events(runId)
-      .find((e) => e.type === "packet.issued" && e.nodeId === task.id);
+      .filter((e) => e.type === "packet.issued" && e.nodeId === nodeId)
+      .at(-1);
     const blob =
       issued?.blobs[0] === undefined ? undefined : this.#o.store.blobs.get(issued.blobs[0]);
-    if (blob === undefined) throw new Error(`no packet for ${task.id}`);
-    const planned = ContextPacket.parse(JSON.parse(new TextDecoder().decode(blob.bytes)));
+    if (blob === undefined) throw new Error(`no packet for ${nodeId}`);
+    return ContextPacket.parse(JSON.parse(new TextDecoder().decode(blob.bytes)));
+  }
+
+  /** The packet a worker gets: the latest planned packet plus upstream results and steering notes. */
+  #packetFor(runId: RunId, state: RunState, task: TaskNode): ContextPacket {
+    const planned = this.#plannedPacket(runId, task.id);
     const upstream = task.dependsOn.flatMap((dep) => {
       const d = state.nodes[dep];
       if (d === undefined || d.headCommit === null) return [];
@@ -903,12 +1396,68 @@ export class RunOrchestrator {
         },
       ];
     });
+    const steering = this.#o.store.events(runId).flatMap((e) =>
+      e.type === "node.steered" && e.nodeId === task.id && e.actor.kind === "model"
+        ? [
+            {
+              attempt: Math.max(1, state.nodes[task.id]?.attempt ?? 1),
+              from: e.actor.model,
+              note: e.payload.note,
+            },
+          ]
+        : [],
+    );
     const { contentHash: _old, ...body } = planned;
-    return this.#sealPacket({ ...body, upstream });
+    return this.#sealPacket({ ...body, upstream, steering });
+  }
+
+  #issuePacket(runId: RunId, packet: ContextPacket): EventDraft {
+    const blob = this.#o.store.blobs.put(
+      canonicalize(packet),
+      "application/vnd.orzeus.packet+json",
+    );
+    return this.#draft(
+      runId,
+      "packet.issued",
+      { packetId: packet.id, contentHash: packet.contentHash },
+      { nodeId: packet.nodeId, blobs: [blob] },
+    );
   }
 
   #sealPacket(body: ContextPacketBody): ContextPacket {
     return { ...body, contentHash: contentHash(body, sha256Text) };
+  }
+
+  #checkpointDraft(runId: RunId, state: RunState, label: string): EventDraft {
+    const refs: Record<string, GitOid> = {};
+    for (const node of Object.values(state.nodes))
+      if (node.status === "succeeded" && node.headCommit !== null) refs[node.id] = node.headCommit;
+    // Checkpoint ids are global in the store, so they carry the run id.
+    const checkpointId = `${runId}.cp${Object.keys(state.checkpoints).length + 1}` as CheckpointId;
+    return this.#draft(runId, "checkpoint.created", { checkpointId, label, refs });
+  }
+
+  #blobText(hash: Sha256, max: number): string {
+    const blob = this.#o.store.blobs.get(hash);
+    return blob === undefined ? "" : new TextDecoder().decode(blob.bytes).slice(0, max);
+  }
+
+  #planningDrafts(runId: RunId, planning: readonly PlanningRecord[]): EventDraft[] {
+    return planning.map((c) =>
+      this.#draft(
+        runId,
+        "model.call",
+        {
+          model: c.model,
+          tier: "frontier",
+          purpose: "plan",
+          usage: c.usage,
+          costMicroUsd: c.costMicroUsd,
+          latencyMs: c.latencyMs,
+        },
+        { actor: { kind: "model", model: c.model, tier: "frontier" } },
+      ),
+    );
   }
 
   #state(runId: RunId): RunState {
@@ -952,4 +1501,28 @@ export class RunOrchestrator {
   #say(line: string): void {
     this.#o.progress?.(line);
   }
+}
+
+/** Every node's command checks (deduplicated) plus the plan's global checks, for the merged result. */
+export function integrationChecks(
+  nodes: readonly TaskNode[],
+  global: readonly CheckSpec[],
+): CheckSpec[] {
+  const seen = new Set<string>();
+  const out: CheckSpec[] = [];
+  const all = [
+    ...nodes.flatMap((n) => n.checks.map((c) => ({ node: n.id as string, check: c }))),
+    ...global.map((c) => ({ node: "global", check: c })),
+  ];
+  for (const check of all) {
+    if (check.check.kind !== "command") continue;
+    const key = `${check.check.cwd}\u0000${check.check.argv.join("\u0000")}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      ...check.check,
+      id: `${check.node}.${check.check.id}`.replace(/[^a-z0-9_.-]/g, "-").slice(0, 64),
+    });
+  }
+  return out;
 }

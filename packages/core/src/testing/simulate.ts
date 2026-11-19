@@ -90,7 +90,11 @@ export function simulateRun(store: RunEventStore, options: SimulationOptions): R
     if (settled !== undefined) {
       return append([
         settled.allSucceeded
-          ? draft("run.completed", { integrationCommit: TEST_COMMIT }, { ts: now })
+          ? draft(
+              "run.completed",
+              { integrationCommit: TEST_COMMIT, mergedInto: null },
+              { ts: now },
+            )
           : draft(
               "run.failed",
               { errorClass: "run.nodes_failed", message: "Some nodes failed." },

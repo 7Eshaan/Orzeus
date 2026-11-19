@@ -7,9 +7,9 @@ import { parseArgs } from "node:util";
 import { buildRepoMap, describeTooling, renderRepoMap } from "@orzeus/context";
 import type { RunState } from "@orzeus/core";
 import { MEMORY_KINDS, type MemoryKind } from "@orzeus/memory-server";
-import type { PlannerOutput, ProjectId, RunId } from "@orzeus/schema";
+import type { CheckpointId, PlannerOutput, ProjectId, RunId } from "@orzeus/schema";
 import { exportJsonl } from "@orzeus/trace";
-import { createEngine, type Engine } from "./compose.js";
+import { createEngine, type Engine, headlessGate } from "./compose.js";
 import { ulid } from "./ids.js";
 import { createJsonLogger } from "./logger.js";
 import { defaultDataDir } from "./paths.js";
@@ -25,14 +25,17 @@ const USAGE = `orzeus ${ENGINE_VERSION}: headless Orzeus
 Usage:
   orzeus run --goal "<what to build>" --repo <path> [--planner <adapter:model>] [--worker <adapter:model>]
   orzeus run <plan.json> --repo <path>                 (hand-written plan)
-  orzeus resume <runId>
+  orzeus resume <runId>                                 (after a crash, a pause, or a rollback)
+  orzeus rollback <runId> <checkpointId>                (then: orzeus resume <runId>)
   orzeus status <runId> | verify <runId> | export <runId>
   orzeus memory add --repo <path> --kind <${MEMORY_KINDS.join("|")}> --title <t> --body <b> [--paths a,b]
   orzeus memory search --repo <path> <query> | memory list --repo <path>
 
 Options:
   --approve-plan        Execute the plan without asking (otherwise you are asked in a terminal)
-  --approve-asks        Allow actions the policy would ask a human about (headless only)
+  --approve-asks        Allow actions the policy would ask a human about, and budget overruns (headless only)
+  --approve-merge       Fast-forward your branch to the result without asking (headless only)
+  --steerer <spec>      Frontier model for steering failed nodes and reviewing; default: the planner
   --planner <spec>      Default: anthropic-api:claude-opus-5-5 if ANTHROPIC_API_KEY is set, else ${DEFAULT_LOCAL_MODEL}
   --worker <spec>       Default: ${DEFAULT_LOCAL_MODEL}
   --base <ref>          Commit to start from (default HEAD)
@@ -133,6 +136,8 @@ async function main(argv: readonly string[]): Promise<number> {
       "enable-codex": { type: "boolean", default: false },
       "approve-plan": { type: "boolean", default: false },
       "approve-asks": { type: "boolean", default: false },
+      "approve-merge": { type: "boolean", default: false },
+      steerer: { type: "string" },
       "no-gateway": { type: "boolean", default: false },
       verbose: { type: "boolean", default: false },
       help: { type: "boolean", default: false },
@@ -144,12 +149,30 @@ async function main(argv: readonly string[]): Promise<number> {
     return values.help ? 0 : 2;
   }
 
+  const interactive = process.stdin.isTTY === true && process.stderr.isTTY === true;
+  const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
+  const plannerSpec =
+    values.planner ?? (hasAnthropic ? "anthropic-api:claude-opus-5-5" : DEFAULT_LOCAL_MODEL);
+  const frontierSpec =
+    values.steerer ??
+    (values.planner !== undefined || values.goal !== undefined || hasAnthropic
+      ? plannerSpec
+      : undefined);
+  const flags = { approveAsks: values["approve-asks"], approveMerge: values["approve-merge"] };
   const engine = createEngine({
+    ...flags,
+    ...(frontierSpec === undefined ? {} : { frontier: frontierSpec }),
+    decideGate: async (gate) => {
+      if (!interactive) return headlessGate(flags)(gate);
+      const approved = await confirm(
+        `${gate.nodeId ?? "Run"} needs your approval: ${gate.reason} Allow? [y/N] `,
+      );
+      return { approved, actor: { kind: "human" } };
+    },
     dataDir: values["data-dir"] ?? defaultDataDir(),
     logger: createJsonLogger((line) => {
       if (values.verbose) process.stderr.write(line);
     }),
-    approveAsks: values["approve-asks"],
     enableCodex: values["enable-codex"],
     gateway: !values["no-gateway"],
     ...(values["ollama-url"] === undefined ? {} : { openAiCompatibleUrl: values["ollama-url"] }),
@@ -174,11 +197,6 @@ async function main(argv: readonly string[]): Promise<number> {
           engine.orchestrator.createRun(projectId, plan);
         } else {
           if (values.goal === undefined) throw new UsageError("give a plan file or --goal");
-          const plannerSpec =
-            values.planner ??
-            (engine.planners.has("anthropic-api")
-              ? "anthropic-api:claude-opus-5-5"
-              : DEFAULT_LOCAL_MODEL);
           const planner = engine.planner(plannerSpec);
           const worker = engine.workerModel(values.worker);
           engine.orchestrator.startRun(projectId, runId, values.goal, repo);
@@ -238,6 +256,20 @@ async function main(argv: readonly string[]): Promise<number> {
         const state = target === undefined ? null : engine.store.load(target as RunId);
         if (state === null) throw new UsageError(`unknown run ${target ?? ""}`);
         write(summary(state));
+        for (const cp of Object.values(state.checkpoints))
+          write(`  checkpoint ${cp.id}: ${cp.label} (event ${cp.atSeq})`);
+        return 0;
+      }
+      case "rollback": {
+        const checkpoint = rest[0];
+        if (target === undefined || checkpoint === undefined)
+          throw new UsageError("rollback needs a run id and a checkpoint id");
+        const state = await engine.orchestrator.rollback(
+          target as RunId,
+          checkpoint as CheckpointId,
+        );
+        write(summary(state));
+        say(`Continue with: orzeus resume ${target}`);
         return 0;
       }
       case "verify": {

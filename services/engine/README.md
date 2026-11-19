@@ -19,6 +19,8 @@ node services/engine/dist/cli.js run services/engine/fixtures/calc/plan.json --r
 node services/engine/dist/cli.js resume <runId>     # after a crash or Ctrl-C
 node services/engine/dist/cli.js verify <runId>     # re-check the hash chain and blobs
 node services/engine/dist/cli.js export <runId>     # canonical JSONL trace
+node services/engine/dist/cli.js status <runId>     # nodes and checkpoints
+node services/engine/dist/cli.js rollback <runId> <checkpointId>   # then resume
 ```
 
 Plans are hand-written for now (see `src/plan-file.ts` and `fixtures/calc/plan.json`); the

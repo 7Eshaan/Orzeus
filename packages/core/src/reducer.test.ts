@@ -121,7 +121,7 @@ describe("run lifecycle", () => {
     const { log } = executingRun();
     rejects(
       log,
-      [draft("run.completed", { integrationCommit: TEST_COMMIT }, { ts })],
+      [draft("run.completed", { integrationCommit: TEST_COMMIT, mergedInto: null }, { ts })],
       /not every node/,
     );
   });
@@ -280,5 +280,81 @@ describe("checkpoints and replay", () => {
     ]);
     const replayed = replay(log.events(TEST_RUN_ID));
     expect(replayed).toEqual({ ok: true, value: live });
+  });
+});
+
+describe("integration, review and reopening", () => {
+  function allSucceeded(): InMemoryRunLog {
+    const { log } = executingRun();
+    for (const id of ["a", "b"]) {
+      log.append(TEST_RUN_ID, [
+        draft("node.ready", {}, { ts, nodeId: id }),
+        dispatched(id, 1),
+        draft("node.verifying", {}, { ts, nodeId: id, attempt: 1 }),
+        draft(
+          "node.succeeded",
+          { headCommit: TEST_COMMIT, summary: "ok" },
+          { ts, nodeId: id, attempt: 1 },
+        ),
+      ]);
+    }
+    return log;
+  }
+
+  it("moves through integrating, reviewing and the merge gate", () => {
+    const log = allSucceeded();
+    let state = log.append(TEST_RUN_ID, [
+      draft(
+        "integration.started",
+        { baseCommit: TEST_COMMIT, branch: "orzeus/x/integration" },
+        { ts },
+      ),
+    ]);
+    expect(state.status).toBe("integrating");
+    state = log.append(TEST_RUN_ID, [
+      draft("integration.checked", { commit: TEST_COMMIT, passed: true, checks: [] }, { ts }),
+    ]);
+    expect(state.status).toBe("reviewing");
+    state = log.append(TEST_RUN_ID, [
+      draft("review.completed", { verdict: "approve", summary: "ok", concerns: [] }, { ts }),
+    ]);
+    expect(state.status).toBe("awaiting_merge_approval");
+    state = log.append(TEST_RUN_ID, [
+      draft("run.completed", { integrationCommit: TEST_COMMIT, mergedInto: "main" }, { ts }),
+    ]);
+    expect(state.status).toBe("completed");
+  });
+
+  it("refuses integration before every node succeeded, and review outside reviewing", () => {
+    const { log } = executingRun();
+    rejects(
+      log,
+      [draft("integration.started", { baseCommit: TEST_COMMIT, branch: "b" }, { ts })],
+      /not every node/,
+    );
+    rejects(
+      log,
+      [draft("review.completed", { verdict: "approve", summary: "", concerns: [] }, { ts })],
+      /nothing to review/,
+    );
+  });
+
+  it("lets a failed run be rolled back but not a completed one", () => {
+    const { log } = executingRun();
+    log.append(TEST_RUN_ID, [
+      draft(
+        "checkpoint.created",
+        { checkpointId: "cp-1" as CheckpointId, label: "start", refs: {} },
+        { ts },
+      ),
+    ]);
+    log.append(TEST_RUN_ID, [
+      draft("run.failed", { errorClass: "run.nodes_failed", message: "x" }, { ts }),
+    ]);
+    rejects(log, [draft("run.paused", { reason: "x" }, { ts })], /already failed/);
+    const reopened = log.append(TEST_RUN_ID, [
+      draft("run.rolled_back", { toCheckpoint: "cp-1" as CheckpointId }, { ts }),
+    ]);
+    expect(reopened.status).toBe("executing");
   });
 });

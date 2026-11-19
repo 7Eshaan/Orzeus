@@ -67,7 +67,10 @@ export function applyEvent(
   if (event.runId !== state.runId) return fail("event belongs to another run");
   if (event.seq !== state.headSeq + 1) return fail(`expected seq ${state.headSeq + 1}`);
   if (event.prevHash !== state.headHash) return fail("prevHash does not link to the current head");
-  if (TERMINAL_RUN_STATUSES.has(state.status)) return fail(`run is already ${state.status}`);
+  // A failed or cancelled run may still be rolled back to a checkpoint and continued.
+  const reopening = event.type === "run.rolled_back" && state.status !== "completed";
+  if (TERMINAL_RUN_STATUSES.has(state.status) && !reopening)
+    return fail(`run is already ${state.status}`);
 
   const step = transition(state, event);
   if (!step.ok) return fail(step.error);
@@ -114,6 +117,22 @@ function transition(state: RunState, event: TraceEvent): Step {
       if (nodesOf(state).some((n) => n.status !== "succeeded"))
         return err("not every node has succeeded");
       return ok({ ...state, status: "completed" });
+    case "integration.started":
+      if (state.status !== "executing")
+        return err(`cannot integrate a run that is ${state.status}`);
+      if (nodesOf(state).some((n) => n.status !== "succeeded"))
+        return err("not every node has succeeded");
+      return ok({ ...state, status: "integrating" });
+    case "integration.checked":
+      return state.status === "integrating"
+        ? ok({ ...state, status: event.payload.passed ? "reviewing" : "integrating" })
+        : err(`no integration in progress (run is ${state.status})`);
+    case "review.completed":
+      if (state.status !== "reviewing") return err(`nothing to review (run is ${state.status})`);
+      return ok({
+        ...state,
+        status: event.payload.verdict === "approve" ? "awaiting_merge_approval" : "reviewing",
+      });
     case "run.failed":
       return ok({ ...state, status: "failed" });
     case "run.cancelled":

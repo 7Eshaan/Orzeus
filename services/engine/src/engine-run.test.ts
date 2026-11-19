@@ -135,6 +135,7 @@ function engine(adapter: ProviderAdapter, lines: string[] = []): Engine {
     logger: createJsonLogger(() => undefined),
     adapters: new AdapterRegistry().register(adapter, account),
     progress: (line) => lines.push(line),
+    lockTtlMs: 600,
   });
   engines.push(e);
   return e;
@@ -256,8 +257,14 @@ describe("headless run", () => {
         first.store.load(runId)?.nodes["multiply"]?.status === "succeeded",
     );
 
+    // A live engine holds the run lock; resuming while it is alive is refused...
     const lines: string[] = [];
     const restarted = engine(new ScriptedAdapter(() => "correct"), lines);
+    await expect(restarted.orchestrator.resume(runId)).rejects.toThrow(
+      /being run by another engine/,
+    );
+    // ...until it "crashes": its lock disappears as if it had expired.
+    first.db.run("DELETE FROM run_locks");
     const final = await restarted.orchestrator.resume(runId);
     expect(final.status).toBe("completed");
     expect(final.nodes["add"]?.attempt).toBe(2);

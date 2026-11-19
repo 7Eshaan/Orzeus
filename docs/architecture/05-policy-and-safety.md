@@ -47,6 +47,18 @@ Checked by `core` on every `usage` and `model.call` event:
   minutes opens a breaker for that adapter (half-open after a cool-down), so a provider outage
   doesn't burn every node's retries.
 
+## Implemented gates (Phase 4)
+
+| Gate                                               | Asked when                                     | Headless default                             |
+| -------------------------------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| Policy `ask` (deletes, unlisted shell, MCP writes) | a worker or gateway call needs it              | denied unless `--approve-asks`               |
+| Budget threshold                                   | run spend crosses a configured fraction        | denied → run pauses, unless `--approve-asks` |
+| Merge                                              | the integrated result passed checks and review | not merged unless `--approve-merge`          |
+| Rollback                                           | only on an explicit `orzeus rollback`          | the command is the approval                  |
+
+In a terminal, the CLI asks interactively instead. Every request and answer is recorded as
+`approval.requested` / `approval.resolved`, with the human or the headless flag as the actor.
+
 ## MCP gateway
 
 Workers never connect to upstream MCP servers directly. Each run gets one loopback

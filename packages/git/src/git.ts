@@ -239,6 +239,57 @@ export class Git {
     await this.run(repo, ["update-ref", "-m", "orzeus", `refs/heads/${branch}`, commit]);
   }
 
+  /** The branch checked out in `repo`, or null when HEAD is detached. */
+  async currentBranch(repo: string): Promise<string | null> {
+    const result = await this.raw(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: repo });
+    return result.exitCode === 0 ? result.stdout.trim() : null;
+  }
+
+  async isClean(repo: string): Promise<boolean> {
+    return (await this.run(repo, ["status", "--porcelain", "--untracked-files=no"])).trim() === "";
+  }
+
+  /**
+   * Moves `branch` from `expected` to `target`, only as a fast-forward. If the branch is checked
+   * out in `repo`, its working tree must be clean and is updated with `merge --ff-only`;
+   * otherwise only the ref moves, atomically, and only if it still points at `expected`.
+   */
+  async fastForward(
+    repo: string,
+    branch: string,
+    expected: GitOid,
+    target: GitOid,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const tip = await this.revParse(repo, `refs/heads/${branch}`).catch(() => null);
+    if (tip === null) return { ok: false, reason: `branch ${branch} does not exist` };
+    if (tip !== expected)
+      return {
+        ok: false,
+        reason: `${branch} moved since the run started (now ${tip.slice(0, 12)})`,
+      };
+    if (
+      (await this.raw(["merge-base", "--is-ancestor", expected, target], { cwd: repo }))
+        .exitCode !== 0
+    ) {
+      return { ok: false, reason: "the result does not descend from the branch tip" };
+    }
+    if ((await this.currentBranch(repo)) === branch) {
+      if (!(await this.isClean(repo)))
+        return { ok: false, reason: `${branch} is checked out with uncommitted changes` };
+      await this.run(repo, ["merge", "--ff-only", "--quiet", target]);
+    } else {
+      await this.run(repo, [
+        "update-ref",
+        "-m",
+        "orzeus: merge",
+        `refs/heads/${branch}`,
+        target,
+        expected,
+      ]);
+    }
+    return { ok: true };
+  }
+
   async branchExists(repo: string, branch: string): Promise<boolean> {
     return (
       (await this.raw(["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: repo }))
