@@ -20,7 +20,8 @@
     "clean": "tsc -b --clean",
     "dev:web": "pnpm build && (node tooling/scripts/dev-bridge.ts & pnpm --filter @orzeus/desktop web:dev)",
     "build:sidecar": "pnpm build && node tooling/scripts/build-sidecar.ts",
-    "package:app": "pnpm build:sidecar && pnpm --filter @orzeus/desktop tauri build --config src-tauri/tauri.bundle.conf.json"
+    "package:app": "node tooling/scripts/package-app.ts",
+    "updater:key": "node tooling/scripts/updater-key.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",

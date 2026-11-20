@@ -1,6 +1,6 @@
 # 0006. No automatic updates in v1
 
-Status: Proposed (2026-11-19), waiting for Ryu
+Status: Superseded by [0007](0007-auto-updates.md) (2026-11-20): Ryu chose automatic updates.
 
 ## Context
 

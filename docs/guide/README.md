@@ -15,7 +15,7 @@ pnpm install
 pnpm dev          # builds everything and opens the app
 ```
 
-To build a standalone app instead, see [Building, signing and notarizing](release-macos.md).
+To build a standalone app instead, see the [release guide](release-macos.md).
 
 Orzeus keeps its data in `~/Library/Application Support/dev.orzeus.desktop` (the database, the
 repository memory and the worktrees). Your own checkout and branch are never touched until you
@@ -79,6 +79,13 @@ Trace (⌘3) shows every event of a run: model calls with token counts, tool cal
 approvals, packets (exactly what each worker was told) and diffs. **Verify chain** recomputes
 the hash chain, so any edit to the history shows up. **Export** writes JSONL or OpenTelemetry
 (OTLP JSON). Secrets are redacted from command output, diffs and logs before they are stored.
+
+## Updates
+
+Settings → **Updates** shows your version and checks GitHub for a newer release once a day.
+"Download and install" fetches it, verifies its signature against the key built into the app,
+and "Restart now" switches to it. Publishing releases is described in the
+[release guide](release-macos.md).
 
 ## Headless use
 

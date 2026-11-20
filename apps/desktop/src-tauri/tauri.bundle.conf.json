@@ -2,10 +2,18 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "externalBin": ["binaries/orzeusd"],
+    "createUpdaterArtifacts": true,
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "hardenedRuntime": true,
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
       "entitlements": "./entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": ["https://github.com/7Eshaan/Orzeus/releases/latest/download/latest.json"]
     }
   }
 }

@@ -17,8 +17,16 @@ use tauri::{Manager, RunEvent};
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
         .manage(sidecar::EngineHandle::default())
         .setup(|app| {
+            // The updater's configuration (public key, endpoint) lives in tauri.bundle.conf.json,
+            // which only packaged builds use. Without it there is nothing to update from, and the
+            // plugin would refuse to start, so it is only added when configured.
+            if app.config().plugins.0.contains_key("updater") {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             sidecar::start(app.handle().clone());
             Ok(())
         })

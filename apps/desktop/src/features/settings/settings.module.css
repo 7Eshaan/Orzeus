@@ -154,3 +154,14 @@
 .limitInput input {
   width: 72px;
 }
+.update {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+.notes {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}

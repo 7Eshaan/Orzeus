@@ -17,7 +17,7 @@ Status: Phase 7 done: packaged as a standalone app. Start with the [user guide](
 ```bash
 pnpm install        # install workspace dependencies
 pnpm dev            # build packages, then open the desktop app with the engine sidecar
-pnpm package:app    # standalone Orzeus.app and DMG (docs/guide/release-macos.md)
+pnpm package:app -- --version X.Y.Z   # release build + update files (docs/guide/release-macos.md)
 pnpm dev:web        # same UI in a browser: http://localhost:1420/?bridge=http://127.0.0.1:1421
 pnpm check          # everything CI runs: Biome, dependency rules, tsc -b, Vitest, fmt/clippy/cargo test
 pnpm test           # TypeScript tests only

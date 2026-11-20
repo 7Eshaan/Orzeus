@@ -6,7 +6,8 @@
     "moduleResolution": "nodenext",
     "customConditions": ["@orzeus/source"],
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": [
     "packages/*/src/**/*.test.ts",

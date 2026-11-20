@@ -5,6 +5,7 @@ import { useLive } from "../../app/live.ts";
 import { Button, Field, inputClass, Panel, Pill } from "../../ui/components.tsx";
 import { McpServers } from "./McpServers.tsx";
 import styles from "./settings.module.css";
+import { Updates } from "./Updates.tsx";
 import { UsageLimits } from "./UsageLimits.tsx";
 
 const KEYS = [
@@ -72,6 +73,7 @@ export function Settings() {
       <UsageLimits />
       <McpServers />
       <Memory />
+      <Updates />
     </div>
   );
 }

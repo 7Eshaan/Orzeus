@@ -22,3 +22,6 @@ apps/desktop/src-tauri/gen/schemas/
 
 # Single-executable build output (tooling/scripts/build-sidecar.ts)
 services/engine/dist-sea/
+
+# Release builds (tooling/scripts/package-app.ts); uploaded to GitHub Releases, never committed
+release/
